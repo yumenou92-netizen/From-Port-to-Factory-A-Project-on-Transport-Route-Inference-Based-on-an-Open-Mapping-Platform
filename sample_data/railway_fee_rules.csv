@@ -1,0 +1,3 @@
+﻿rule_id,origin_station_id,destination_station_id,origin_operation_fee,railway_freight_fee,destination_unloading_fee,short_truck_fee,container_type,is_open_top_container,tarpaulin_return_fee,total_fee
+R001,RAIL_O,RAIL_D,8,50,6,12,敞顶箱,true,3,79
+R002,RAIL_O,RAIL_D,8,50,6,12,普通箱,false,0,76

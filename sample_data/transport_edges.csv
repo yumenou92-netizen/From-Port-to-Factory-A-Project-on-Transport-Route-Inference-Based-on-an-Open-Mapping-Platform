@@ -1,0 +1,8 @@
+﻿edge_id,from_node_id,to_node_id,transport_mode,distance,distance_unit,base_cost,base_time,cost_source,rule_type,is_active
+E001,NP_A,SP_B,散船,1200,海里,74.2,5,指数测算,bulk_shipping_index,true
+E002,SP_B,CUST_001,直接汽运,180,公里,90,0.6,示例台账,truck,true
+E003,SP_B,PUB_T1,码头运输,60,海里,25,1.5,示例台账,terminal_ship,true
+E004,PUB_T1,CUST_001,短途汽运,50,公里,20,0.3,示例台账,short_truck,true
+E005,SP_B,RAIL_O,站前短驳,20,公里,8,0.2,示例台账,truck,true
+E006,RAIL_O,RAIL_D,铁路,300,铁路公里,73,3,铁路费用规则,railway,true
+E007,RAIL_D,CUST_001,短途拖车,30,公里,15,0.25,示例台账,short_truck,true

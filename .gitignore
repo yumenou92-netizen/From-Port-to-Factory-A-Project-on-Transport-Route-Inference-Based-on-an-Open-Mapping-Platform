@@ -1,0 +1,28 @@
+# Python cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Local dependency/cache folders
+.python_packages/
+.pytest_cache/
+
+# Local environment
+.env
+.venv/
+venv/
+
+# IDE/editor
+.idea/
+.vscode/
+
+# Generated outputs
+output/
+
+# Temporary Office lock files
+~$*.docx
+~$*.xlsx
+
+# Archives and local packages
+*.zip
+*.rar

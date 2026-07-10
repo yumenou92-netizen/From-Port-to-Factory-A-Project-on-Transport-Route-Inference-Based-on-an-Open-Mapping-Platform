@@ -1,0 +1,3 @@
+﻿price_id,date,from_port_id,to_port_id,price_mode,coal_index,index_multiplier,harbor_sailing_fee,profit_fee,manual_quote_price,final_price
+B001,2026-07-09,NP_A,SP_B,index,60,1.12,2,5,,74.2
+B002,2026-07-09,NP_A,SP_B,manual,,,,,78,78

@@ -1,0 +1,10 @@
+pandas
+openpyxl
+networkx
+numpy
+pydantic
+python-dotenv
+requests
+geopy
+xlsxwriter
+pytest

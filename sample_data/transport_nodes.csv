@@ -1,0 +1,7 @@
+﻿node_id,node_name,node_type,longitude,latitude,region,supported_modes,is_active
+NP_A,北方港口A,northern_port,121.6,38.9,北方,"bulk_ship,rail,container",true
+SP_B,南方港口B,southern_port,113.7,22.9,南方,"bulk_ship,truck,rail",true
+PUB_T1,公共码头T1,public_terminal,113.8,23.0,南方,"ship,truck",true
+RAIL_O,铁路始发站O,rail_origin_station,113.75,22.95,南方,"rail,truck",true
+RAIL_D,铁路到站D,rail_destination_station,114.1,23.2,南方,"rail,truck",true
+CUST_001,客户工厂001,customer_factory,114.2,23.25,南方,truck,true

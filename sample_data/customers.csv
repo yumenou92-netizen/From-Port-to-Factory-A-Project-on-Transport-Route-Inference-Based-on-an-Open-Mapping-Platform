@@ -1,0 +1,2 @@
+﻿customer_id,customer_name,factory_longitude,factory_latitude,address,region,has_private_terminal,private_terminal_id
+CUST_001,客户工厂001,114.2,23.25,示例地址,南方,false,

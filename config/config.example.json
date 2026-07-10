@@ -1,0 +1,12 @@
+{
+  "bulk_shipping": {
+    "index_multiplier": 1.12,
+    "harbor_sailing_fee": 2,
+    "profit_fee": 5
+  },
+  "route_planning": {
+    "default_cost_weight": "cost",
+    "default_time_weight": "time",
+    "allow_estimated_edges": false
+  }
+}
