@@ -657,6 +657,7 @@ python -m pytest tests
 - 测试是否通过。
 - 还有哪些业务口径未确认。
 - 当前 Git 状态、建议提交信息，以及是否建议推送到 GitHub。
+- Git 提交或推送前的敏感信息检查结果。
 
 ## 17. 开发纪律
 
@@ -676,6 +677,25 @@ python -m pytest tests
 - 不在集装箱 20 公里以上公式未复核前用于正式推荐。
 - 不把真实业务数据、客户信息、坐标明细、原始运价表或本地 Excel 数据上传到 GitHub。
 - 不在未确认提交范围前自动执行 `git push`；自动 Git 操作只允许在用户明确授权且确认不包含业务数据后进行。
+- 每一次 `git commit` 和 `git push` 前，必须检查暂存区、待提交文件、提交树和 ignored 状态，确认业务数据、真实 JSON、Excel、输出报告、客户信息和坐标明细均已脱敏或被屏蔽。
+
+提交前至少执行：
+
+```powershell
+git status --short --branch
+git status --short --ignored data_REAL output
+git diff --cached --name-only
+git diff --cached --name-only | Select-String -Pattern "data_REAL|output|\.json$|\.xlsx$|\.xls$|\.csv$"
+git ls-files data_REAL output
+```
+
+如果执行 `git push`，推送前还必须确认最近提交树中没有敏感文件：
+
+```powershell
+git ls-tree -r --name-only HEAD | Select-String -Pattern "data_REAL|output|\.xlsx$|\.xls$|运价表\.json$|地点经纬度\.json$|其他费用表\.json$"
+```
+
+上述敏感检查如果出现命中，必须停止提交或推送，先处理脱敏、忽略规则或取消暂存。
 
 ### 允许保留为占位
 
