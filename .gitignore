@@ -19,6 +19,25 @@ venv/
 # Generated outputs
 output/
 
+# Private/business data - do not upload to GitHub
+data/
+raw_data/
+local_data/
+private_data/
+business_data/
+DATA_DIR/
+real_data/
+*业务数据*/
+*真实数据*/
+*客户信息*/
+*坐标信息*/
+*运价表*.json
+*地点经纬度*.json
+*其他费用表*.json
+*.xlsx
+*.xls
+*.xlsm
+
 # Temporary Office lock files
 ~$*.docx
 ~$*.xlsx
