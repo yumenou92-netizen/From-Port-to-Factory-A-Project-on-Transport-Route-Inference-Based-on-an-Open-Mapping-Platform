@@ -1,6 +1,7 @@
 import json
 
 from src.data_audit import audit_json_file, load_json_records
+from src.data_audit import main as run_data_audit
 
 
 def test_load_json_lines_records(tmp_path):
@@ -50,3 +51,33 @@ def test_audit_json_file_detects_required_edge_fields_and_fee_issues(tmp_path):
     assert not audit.missing_edge_fields
     assert audit.fee_issues["费用"].non_numeric_count == 1
     assert audit.date_invalid_count == 1
+
+
+def test_data_audit_main_supports_custom_output_paths(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    report_path = tmp_path / "private_report.md"
+    summary_path = tmp_path / "private_summary.csv"
+    path = data_dir / "rates.json"
+    row = {
+        "始发": "漳州港",
+        "到达": "客户A",
+        "运输方式": "汽运",
+        "包装方式": "散粮",
+        "适用品种": "玉米",
+        "费用": 10,
+        "费用单位": "元/吨",
+        "价格来源": "测试",
+    }
+    path.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setenv("DATA_DIR", str(data_dir))
+    monkeypatch.setenv("DATA_AUDIT_REPORT_PATH", str(report_path))
+    monkeypatch.setenv("DATA_QUALITY_SUMMARY_PATH", str(summary_path))
+
+    run_data_audit()
+
+    assert report_path.exists()
+    assert summary_path.exists()
+    assert "数据使用审计报告" in report_path.read_text(encoding="utf-8")
+    assert "rates.json" in summary_path.read_text(encoding="utf-8-sig")

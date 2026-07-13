@@ -20,7 +20,7 @@ VALUE_PREVIEW_LIMIT = 40
 
 
 class DataAuditError(Exception):
-    """Raised when JSON data audit cannot proceed."""
+    """Raised when JSON data audit cannot proceed.//报错检查当JSON数据无法处理"""
 
 
 @dataclass
@@ -541,12 +541,14 @@ def format_number(value: float | None) -> str:
 def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
     data_dir = data_dir_from_env()
+    report_path = Path(os.environ.get("DATA_AUDIT_REPORT_PATH", project_root / "docs" / "data_usage_report.md"))
+    summary_path = Path(os.environ.get("DATA_QUALITY_SUMMARY_PATH", project_root / "output" / "data_quality_summary.csv"))
     audits = audit_data_dir(data_dir)
-    write_markdown_report(audits, data_dir, project_root / "docs" / "data_usage_report.md")
-    write_summary_csv(audits, project_root / "output" / "data_quality_summary.csv")
+    write_markdown_report(audits, data_dir, report_path)
+    write_summary_csv(audits, summary_path)
     print(f"已审计 JSON 文件数: {len(audits)}")
-    print(f"已生成: {project_root / 'docs' / 'data_usage_report.md'}")
-    print(f"已生成: {project_root / 'output' / 'data_quality_summary.csv'}")
+    print(f"已生成: {report_path}")
+    print(f"已生成: {summary_path}")
 
 
 if __name__ == "__main__":

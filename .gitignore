@@ -21,6 +21,8 @@ output/
 
 # Private/business data - do not upload to GitHub
 data/
+data_REAL/
+data_real/
 raw_data/
 local_data/
 private_data/
