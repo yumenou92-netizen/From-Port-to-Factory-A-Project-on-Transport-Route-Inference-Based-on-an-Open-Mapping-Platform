@@ -43,6 +43,7 @@ real_data/
 # Temporary Office lock files
 ~$*.docx
 ~$*.xlsx
+~$*.pptx
 
 # Archives and local packages
 *.zip

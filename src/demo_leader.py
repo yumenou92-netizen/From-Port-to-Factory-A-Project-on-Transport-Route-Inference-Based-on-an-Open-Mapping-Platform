@@ -4,6 +4,7 @@ import sys
 from collections.abc import Callable
 
 from demo_leader_cost_rules import main as run_cost_rules_demo
+from demo_leader_node_registry import main as run_node_registry_demo
 from demo_leader_real_data import main as run_real_data_demo
 
 
@@ -11,6 +12,7 @@ DemoRunner = Callable[[], None]
 
 
 LEADER_DEMOS: dict[str, tuple[str, DemoRunner]] = {
+    "node-registry": ("节点标准化能力展示", run_node_registry_demo),
     "real-data": ("真实业务数据接入状态展示", run_real_data_demo),
     "cost-rules": ("费用计算与单位校验展示", run_cost_rules_demo),
 }
@@ -30,15 +32,15 @@ def main() -> None:
     print("=" * 52)
     print("当前可展示模块：")
     print_menu()
-    print("\n默认运行最新已完成模块展示：真实业务数据接入状态。")
+    print("\n默认运行最新已完成模块展示：节点标准化能力。")
     print("=" * 52)
-    run_real_data_demo()
+    run_node_registry_demo()
 
 
 def print_menu() -> None:
     for demo_key, (title, _) in LEADER_DEMOS.items():
         print(f"- {demo_key}: {title}")
-    print("\n运行方式示例：python src/demo_leader.py real-data")
+    print("\n运行方式示例：python src/demo_leader.py node-registry")
 
 
 def run_demo(demo_key: str) -> None:
