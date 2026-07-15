@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from data_loaders import (
     DataLoadError,
-    build_order_edge_candidates,
+    build_order_edge_candidates_for_request,
     data_dir_from_env,
     load_real_data_bundle,
 )
+from route_request import RouteRequest
 
 
 def main() -> None:
@@ -30,18 +31,20 @@ def main() -> None:
     print("运价表用于生成候选运输边，地点经纬度用于生成节点坐标，其他费用表用于后续补充节点作业费用。")
     print("费用进入路径搜索前，必须结合订单数量换算成该运输段总金额，不能直接相加原始单价。")
 
-    result = build_order_edge_candidates(
-        bundle,
+    request = RouteRequest(
         quantity=500,
         quantity_unit="吨",
-        packaging="散粮",
-        product="玉米",
+        package_type="散粮",
+        commodity="玉米",
     )
+    result = build_order_edge_candidates_for_request(bundle, request)
 
     print("\n三、示例订单校验")
     print("示例订单: 500吨，散粮，玉米")
-    print(f"可形成候选运输边: {len(result.candidates)} 条")
-    print(f"因单位不匹配跳过: {result.skipped_unit_mismatch} 条")
+    print(f"已完成订单段计费的候选记录: {len(result.candidates)} 条")
+    print(f"两端节点齐全、可进入后续图构建: {len(result.graph_ready_candidates)} 条")
+    print(f"仍缺少节点匹配的候选记录: {result.missing_node_candidate_count} 条")
+    print(f"需人工确认的计费记录: {len(result.manual_review_items)} 条")
     print(f"因包装方式不匹配跳过: {result.skipped_packaging} 条")
     print(f"因适用品种不匹配跳过: {result.skipped_product} 条")
 

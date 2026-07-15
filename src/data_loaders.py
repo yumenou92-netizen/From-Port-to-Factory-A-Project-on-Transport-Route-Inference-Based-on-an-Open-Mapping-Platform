@@ -6,15 +6,25 @@ import math
 import os
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 try:
-    from .unit_conversion import UnitConversionError, calculate_total_cost
+    from .route_request import (
+        RequestBillingValidation,
+        RouteRequest,
+        evaluate_freight_charge,
+        validate_request_billing,
+    )
 except ImportError:  # Support direct script-style imports used by demo scripts.
-    from unit_conversion import UnitConversionError, calculate_total_cost
+    from route_request import (
+        RequestBillingValidation,
+        RouteRequest,
+        evaluate_freight_charge,
+        validate_request_billing,
+    )
 
 
 REAL_RATE_FILE = "运价表.json"
@@ -73,11 +83,46 @@ class EdgeCandidate:
 
 
 @dataclass(frozen=True)
+class EdgeReviewItem:
+    origin: str
+    destination: str
+    transport_mode: str
+    packaging: str
+    quantity: str
+    quantity_unit: str
+    unit_fee: Decimal
+    fee_unit: str
+    price_source: str
+    maintenance_date: str | None
+    review_reason: str
+
+
+@dataclass(frozen=True)
 class EdgeBuildResult:
     candidates: list[EdgeCandidate]
-    skipped_unit_mismatch: int = 0
+    request_validation: RequestBillingValidation = field(
+        default_factory=lambda: RequestBillingValidation(status="valid")
+    )
     skipped_packaging: int = 0
     skipped_product: int = 0
+    manual_review_items: list[EdgeReviewItem] = field(default_factory=list)
+
+    @property
+    def manual_review_count(self) -> int:
+        request_review_count = int(self.request_validation.requires_manual_review)
+        return request_review_count + len(self.manual_review_items)
+
+    @property
+    def graph_ready_candidates(self) -> list[EdgeCandidate]:
+        return [
+            candidate
+            for candidate in self.candidates
+            if candidate.from_node_id is not None and candidate.to_node_id is not None
+        ]
+
+    @property
+    def missing_node_candidate_count(self) -> int:
+        return len(self.candidates) - len(self.graph_ready_candidates)
 
 
 @dataclass(frozen=True)
@@ -251,28 +296,60 @@ def build_order_edge_candidates(
     bundle: RealDataBundle,
     quantity: int | float | str | Decimal,
     quantity_unit: str,
-    packaging: str | None = None,
-    product: str | None = None,
+    packaging: str,
+    product: str,
 ) -> EdgeBuildResult:
+    request = RouteRequest(
+        quantity=quantity,
+        quantity_unit=quantity_unit,
+        package_type=packaging,
+        commodity=product,
+    )
+    return build_order_edge_candidates_for_request(bundle, request)
+
+
+def build_order_edge_candidates_for_request(
+    bundle: RealDataBundle,
+    request: RouteRequest,
+) -> EdgeBuildResult:
+    request_validation = validate_request_billing(request)
+    if request_validation.requires_manual_review:
+        return EdgeBuildResult(candidates=[], request_validation=request_validation)
+
     nodes = bundle.node_by_name
     candidates: list[EdgeCandidate] = []
-    skipped_unit_mismatch = 0
+    manual_review_items: list[EdgeReviewItem] = []
     skipped_packaging = 0
     skipped_product = 0
 
     for rate in bundle.freight_rates:
-        if packaging and rate.packaging != packaging:
-            skipped_packaging += 1
-            continue
-        if product and not product_matches(product, rate.product_scope):
+        if not product_matches(request.commodity, rate.product_scope):
             skipped_product += 1
             continue
 
-        try:
-            total_cost = calculate_total_cost(rate.fee, rate.fee_unit, quantity, quantity_unit)
-        except UnitConversionError:
-            skipped_unit_mismatch += 1
+        evaluation = evaluate_freight_charge(
+            request,
+            transport_mode=rate.transport_mode,
+            rate_packaging=rate.packaging,
+            raw_price=rate.fee,
+            price_unit=rate.fee_unit,
+        )
+        if evaluation.status == "not_applicable":
+            skipped_packaging += 1
             continue
+        if evaluation.requires_manual_review:
+            manual_review_items.append(
+                make_edge_review_item(
+                    rate,
+                    request.quantity,
+                    request.quantity_unit,
+                    evaluation.message,
+                )
+            )
+            continue
+        if evaluation.total_cost is None:
+            raise DataLoadError("有效运价评估缺少运输段总费用。")
+        total_cost = evaluation.total_cost
 
         origin_node = nodes.get(rate.origin)
         destination_node = nodes.get(rate.destination)
@@ -295,9 +372,31 @@ def build_order_edge_candidates(
 
     return EdgeBuildResult(
         candidates=candidates,
-        skipped_unit_mismatch=skipped_unit_mismatch,
+        request_validation=request_validation,
         skipped_packaging=skipped_packaging,
         skipped_product=skipped_product,
+        manual_review_items=manual_review_items,
+    )
+
+
+def make_edge_review_item(
+    rate: FreightRate,
+    quantity: int | float | str | Decimal,
+    quantity_unit: str,
+    review_reason: str,
+) -> EdgeReviewItem:
+    return EdgeReviewItem(
+        origin=rate.origin,
+        destination=rate.destination,
+        transport_mode=rate.transport_mode,
+        packaging=rate.packaging,
+        quantity=str(quantity),
+        quantity_unit=str(quantity_unit).strip(),
+        unit_fee=rate.fee,
+        fee_unit=rate.fee_unit,
+        price_source=rate.price_source,
+        maintenance_date=rate.maintenance_date,
+        review_reason=review_reason,
     )
 
 
@@ -322,3 +421,45 @@ def edge_candidate_to_row(candidate: EdgeCandidate) -> dict[str, Any]:
         "price_source": candidate.price_source,
         "maintenance_date": candidate.maintenance_date or "",
     }
+
+
+def edge_review_item_to_row(item: EdgeReviewItem) -> dict[str, Any]:
+    return {
+        "validation_status": "manual_review",
+        "validation_scope": "freight_rate",
+        "origin": item.origin,
+        "destination": item.destination,
+        "transport_mode": item.transport_mode,
+        "packaging": item.packaging,
+        "quantity": item.quantity,
+        "quantity_unit": item.quantity_unit,
+        "unit_fee": str(item.unit_fee),
+        "fee_unit": item.fee_unit,
+        "price_source": item.price_source,
+        "maintenance_date": item.maintenance_date or "",
+        "review_reason": item.review_reason,
+    }
+
+
+def build_review_rows(result: EdgeBuildResult, request: RouteRequest) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if result.request_validation.requires_manual_review:
+        rows.append(
+            {
+                "validation_status": "manual_review",
+                "validation_scope": "request",
+                "origin": "",
+                "destination": "",
+                "transport_mode": "",
+                "packaging": request.package_type,
+                "quantity": str(request.quantity),
+                "quantity_unit": request.quantity_unit,
+                "unit_fee": "",
+                "fee_unit": "",
+                "price_source": "",
+                "maintenance_date": "",
+                "review_reason": "；".join(result.request_validation.issues),
+            }
+        )
+    rows.extend(edge_review_item_to_row(item) for item in result.manual_review_items)
+    return rows
