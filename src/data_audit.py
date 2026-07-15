@@ -17,6 +17,8 @@ EDGE_CONTEXT_FIELDS = {"包装方式", "包装类型", "适用品种", "价格�
 COORDINATE_FIELDS = {"名称", "经度", "纬度"}
 DATE_FIELDS = {"维护日期"}
 VALUE_PREVIEW_LIMIT = 40
+MISSING_FEE_UNIT = "<缺少费用单位>"
+ALLOW_EXTERNAL_SENSITIVE_OUTPUT_ENV = "DATA_AUDIT_ALLOW_EXTERNAL_SENSITIVE_OUTPUT"
 
 
 class DataAuditError(Exception):
@@ -34,6 +36,7 @@ class FieldStats:
 @dataclass
 class FeeIssueStats:
     field_name: str
+    fee_unit: str
     numeric_count: int = 0
     string_count: int = 0
     non_numeric_count: int = 0
@@ -57,7 +60,7 @@ class JsonFileAudit:
     empty_origin_count: int = 0
     empty_destination_count: int = 0
     alias_groups: dict[str, list[str]] = field(default_factory=dict)
-    fee_issues: dict[str, FeeIssueStats] = field(default_factory=dict)
+    fee_issues: list[FeeIssueStats] = field(default_factory=list)
     date_empty_count: int = 0
     date_invalid_count: int = 0
     date_formats: Counter[str] = field(default_factory=Counter)
@@ -253,13 +256,36 @@ def normalize_name_for_alias(name: str) -> str:
     return text
 
 
-def collect_fee_issues(records: list[dict[str, Any]]) -> dict[str, FeeIssueStats]:
+def collect_fee_issues(records: list[dict[str, Any]]) -> list[FeeIssueStats]:
     fee_fields = sorted({field_name for record in records for field_name in record if field_name in {"费用", "单价"}})
-    return {field_name: audit_fee_field(records, field_name) for field_name in fee_fields}
+    issues: list[FeeIssueStats] = []
+    for field_name in fee_fields:
+        fee_units = sorted(
+            {
+                normalized_fee_unit(record.get("费用单位"))
+                for record in records
+                if not is_missing(record.get(field_name))
+            }
+        )
+        for fee_unit in fee_units:
+            matching_records = [
+                record
+                for record in records
+                if not is_missing(record.get(field_name))
+                and normalized_fee_unit(record.get("费用单位")) == fee_unit
+            ]
+            issues.append(audit_fee_field(matching_records, field_name, fee_unit))
+    return issues
 
 
-def audit_fee_field(records: list[dict[str, Any]], field_name: str) -> FeeIssueStats:
-    stats = FeeIssueStats(field_name=field_name)
+def normalized_fee_unit(value: Any) -> str:
+    if is_missing(value):
+        return MISSING_FEE_UNIT
+    return str(value).strip().replace("／", "/").replace(" ", "")
+
+
+def audit_fee_field(records: list[dict[str, Any]], field_name: str, fee_unit: str) -> FeeIssueStats:
+    stats = FeeIssueStats(field_name=field_name, fee_unit=fee_unit)
     numeric_values: list[float] = []
     for record in records:
         value = record.get(field_name)
@@ -393,14 +419,25 @@ def write_summary_csv(audits: list[JsonFileAudit], output_path: Path) -> None:
                 )
 
 
-def write_markdown_report(audits: list[JsonFileAudit], data_dir: Path, output_path: Path) -> None:
+def write_markdown_report(
+    audits: list[JsonFileAudit],
+    data_dir: Path,
+    output_path: Path,
+    *,
+    include_sensitive_details: bool = False,
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     lines.append("# 数据使用审计报告")
     lines.append("")
-    lines.append(f"- 数据目录: `{data_dir}`")
+    displayed_data_dir = str(data_dir) if include_sensitive_details else "<DATA_DIR：本地路径已脱敏>"
+    lines.append(f"- 数据目录: `{displayed_data_dir}`")
     lines.append(f"- JSON 文件数: {len(audits)}")
     lines.append("- 本报告只审计 JSON 数据，不将记录写入路径图。")
+    if include_sensitive_details:
+        lines.append("- 本报告包含本地业务明细，只能保存在已被 Git 忽略的 `output/` 目录。")
+    else:
+        lines.append("- 本报告为可协同的脱敏汇总；真实名称、坐标、费用样本和别名示例仅保存在本地详细报告中。")
     lines.append("")
 
     lines.append("## 1. 文件清单")
@@ -422,26 +459,24 @@ def write_markdown_report(audits: list[JsonFileAudit], data_dir: Path, output_pa
             missing_rate = round(stats.missing / audit.record_count, 4) if audit.record_count else 0
             lines.append(
                 f"| {field_name} | {stats.present} | {stats.missing} | {missing_rate:.2%} | "
-                f"{format_counter(stats.type_counts)} | {format_counter(stats.values, 12)} |"
+                f"{format_counter(stats.type_counts)} | "
+                f"{format_field_preview(stats, include_sensitive_details)} |"
             )
     lines.append("")
 
     lines.append("## 3. 关键业务字段取值")
-    append_value_section(lines, audits, "运输方式")
-    append_value_section(lines, audits, "费用单位")
-    append_value_section(lines, audits, "包装方式")
-    append_value_section(lines, audits, "包装类型")
-    append_value_section(lines, audits, "适用品种")
+    append_value_section(lines, audits, "运输方式", include_sensitive_details)
+    append_value_section(lines, audits, "费用单位", include_sensitive_details)
+    append_value_section(lines, audits, "包装方式", include_sensitive_details)
+    append_value_section(lines, audits, "包装类型", include_sensitive_details)
+    append_value_section(lines, audits, "适用品种", include_sensitive_details)
 
     lines.append("## 4. 始发、到达名称质量")
     lines.append("")
     lines.append("| 文件 | 始发空值 | 到达空值 | 明显别名组数 | 别名示例 |")
     lines.append("|---|---:|---:|---:|---|")
     for audit in audits:
-        alias_examples = "; ".join(
-            f"{key}: {', '.join(values[:4])}"
-            for key, values in list(audit.alias_groups.items())[:5]
-        )
+        alias_examples = format_alias_examples(audit, include_sensitive_details)
         lines.append(
             f"| {audit.path.name} | {audit.empty_origin_count} | {audit.empty_destination_count} | "
             f"{len(audit.alias_groups)} | {alias_examples or '-'} |"
@@ -458,17 +493,21 @@ def write_markdown_report(audits: list[JsonFileAudit], data_dir: Path, output_pa
 
     lines.append("## 6. 费用质量检查")
     lines.append("")
-    lines.append("| 文件 | 费用字段 | 数值数 | 字符串数 | 非数值数 | 负数 | 零值 | 异常值数 | 最小值 | 最大值 | 异常示例 |")
-    lines.append("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+    lines.append("费用异常按 `费用字段 + 费用单位` 分组判断，不混合比较元/吨、元/箱或元/柜。")
+    lines.append("")
+    lines.append("| 文件 | 费用字段 | 费用单位 | 数值数 | 字符串数 | 非数值数 | 负数 | 零值 | 异常值数 | 最小值 | 最大值 | 异常示例 |")
+    lines.append("|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|")
     for audit in audits:
         if not audit.fee_issues:
-            lines.append(f"| {audit.path.name} | - | 0 | 0 | 0 | 0 | 0 | 0 | - | - | - |")
+            lines.append(f"| {audit.path.name} | - | - | 0 | 0 | 0 | 0 | 0 | 0 | - | - | - |")
             continue
-        for issue in audit.fee_issues.values():
+        for issue in audit.fee_issues:
+            min_value, max_value, examples = format_fee_details(issue, include_sensitive_details)
             lines.append(
-                f"| {audit.path.name} | {issue.field_name} | {issue.numeric_count} | {issue.string_count} | "
+                f"| {audit.path.name} | {issue.field_name} | {issue.fee_unit} | "
+                f"{issue.numeric_count} | {issue.string_count} | "
                 f"{issue.non_numeric_count} | {issue.negative_count} | {issue.zero_count} | {issue.outlier_count} | "
-                f"{format_number(issue.min_value)} | {format_number(issue.max_value)} | {', '.join(map(format_number, issue.outlier_examples)) or '-'} |"
+                f"{min_value} | {max_value} | {examples} |"
             )
     lines.append("")
 
@@ -504,10 +543,46 @@ def write_markdown_report(audits: list[JsonFileAudit], data_dir: Path, output_pa
     lines.append("- 当前 JSON 数据没有统一 node_id；后续必须先做地点名称到 node_id 的标准化映射，特别是南方港口必须保持同一个物理节点只对应一个 node_id。")
     lines.append("")
 
-    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    output_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 
 
-def append_value_section(lines: list[str], audits: list[JsonFileAudit], field_name: str) -> None:
+def format_field_preview(
+    stats: FieldStats,
+    include_sensitive_details: bool,
+) -> str:
+    if not include_sensitive_details:
+        return f"已脱敏（唯一值 {len(stats.values)}）"
+    return format_counter(stats.values, 12) or "-"
+
+
+def format_alias_examples(audit: JsonFileAudit, include_sensitive_details: bool) -> str:
+    if not audit.alias_groups:
+        return "-"
+    if not include_sensitive_details:
+        return "已脱敏，详见本地详细报告"
+    return "; ".join(
+        f"{key}: {', '.join(values[:4])}"
+        for key, values in list(audit.alias_groups.items())[:5]
+    )
+
+
+def format_fee_details(
+    issue: FeeIssueStats,
+    include_sensitive_details: bool,
+) -> tuple[str, str, str]:
+    if not include_sensitive_details:
+        examples = f"已脱敏（{issue.outlier_count} 条）" if issue.outlier_count else "-"
+        return "已脱敏", "已脱敏", examples
+    examples = ", ".join(map(format_number, issue.outlier_examples)) or "-"
+    return format_number(issue.min_value), format_number(issue.max_value), examples
+
+
+def append_value_section(
+    lines: list[str],
+    audits: list[JsonFileAudit],
+    field_name: str,
+    include_sensitive_details: bool,
+) -> None:
     combined: Counter[str] = Counter()
     for audit in audits:
         stats = audit.field_stats.get(field_name)
@@ -518,6 +593,10 @@ def append_value_section(lines: list[str], audits: list[JsonFileAudit], field_na
     lines.append("")
     if not combined:
         lines.append("- 未发现该字段。")
+        return
+    if not include_sensitive_details:
+        lines.append(f"- 取值已脱敏；唯一值 {len(combined)} 个，非空记录 {sum(combined.values())} 条。")
+        lines.append("")
         return
     for value, count in combined.most_common():
         lines.append(f"- `{value}`: {count}")
@@ -538,17 +617,70 @@ def format_number(value: float | None) -> str:
     return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
+def resolve_audit_output_paths(project_root: Path) -> tuple[Path, Path, Path]:
+    report_path = Path(os.environ.get("DATA_AUDIT_REPORT_PATH", project_root / "docs" / "data_usage_report.md"))
+    detailed_report_path = Path(
+        os.environ.get(
+            "DATA_AUDIT_DETAILED_REPORT_PATH",
+            project_root / "output" / "data_usage_report_detailed.md",
+        )
+    )
+    summary_path = Path(os.environ.get("DATA_QUALITY_SUMMARY_PATH", project_root / "output" / "data_quality_summary.csv"))
+    validate_sensitive_output_path(project_root, detailed_report_path, "本地详细报告")
+    validate_sensitive_output_path(project_root, summary_path, "本地质量 CSV")
+    return report_path, detailed_report_path, summary_path
+
+
+def validate_sensitive_output_path(project_root: Path, output_path: Path, output_name: str) -> None:
+    resolved_project_root = project_root.resolve()
+    resolved_output_dir = (resolved_project_root / "output").resolve()
+    resolved_path = output_path.resolve()
+    if is_path_within(resolved_path, resolved_output_dir):
+        return
+    if (
+        not is_path_within(resolved_path, resolved_project_root)
+        and os.environ.get(ALLOW_EXTERNAL_SENSITIVE_OUTPUT_ENV) == "1"
+    ):
+        return
+    raise DataAuditError(
+        f"{output_name}可能包含真实业务数据，只允许写入项目 output/ 目录。"
+        f"如确需写入项目外临时目录，请显式设置 {ALLOW_EXTERNAL_SENSITIVE_OUTPUT_ENV}=1。"
+    )
+
+
+def is_path_within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def display_output_path(project_root: Path, output_path: Path) -> str:
+    resolved_path = output_path.resolve()
+    resolved_project_root = project_root.resolve()
+    if is_path_within(resolved_path, resolved_project_root):
+        return str(resolved_path.relative_to(resolved_project_root))
+    return "<项目外本地路径已隐藏>"
+
+
 def main() -> None:
     project_root = Path(__file__).resolve().parents[1]
     data_dir = data_dir_from_env()
-    report_path = Path(os.environ.get("DATA_AUDIT_REPORT_PATH", project_root / "docs" / "data_usage_report.md"))
-    summary_path = Path(os.environ.get("DATA_QUALITY_SUMMARY_PATH", project_root / "output" / "data_quality_summary.csv"))
+    report_path, detailed_report_path, summary_path = resolve_audit_output_paths(project_root)
     audits = audit_data_dir(data_dir)
     write_markdown_report(audits, data_dir, report_path)
+    write_markdown_report(
+        audits,
+        data_dir,
+        detailed_report_path,
+        include_sensitive_details=True,
+    )
     write_summary_csv(audits, summary_path)
     print(f"已审计 JSON 文件数: {len(audits)}")
-    print(f"已生成: {report_path}")
-    print(f"已生成: {summary_path}")
+    print(f"已生成脱敏汇总: {display_output_path(project_root, report_path)}")
+    print(f"已生成本地详细报告: {display_output_path(project_root, detailed_report_path)}")
+    print(f"已生成本地质量 CSV: {display_output_path(project_root, summary_path)}")
 
 
 if __name__ == "__main__":
