@@ -5,9 +5,11 @@ from dataclasses import dataclass
 from typing import Iterable
 
 try:
-    from .data_loaders import FreightRate, NodeRecord, make_node_id
+    from .data_loaders import NodeRecord, make_node_id
+    from .freight_rate import FreightRate
 except ImportError:  # Support direct script-style imports used by demo scripts.
-    from data_loaders import FreightRate, NodeRecord, make_node_id
+    from data_loaders import NodeRecord, make_node_id
+    from freight_rate import FreightRate
 
 
 DEFAULT_COORDINATE_TOLERANCE = 0.02
@@ -279,16 +281,16 @@ def analyze_freight_rate_node_coverage(
     matched_rate_records = 0
 
     for rate in rates:
-        unique_names.update({rate.origin, rate.destination})
-        origin_node = registry.lookup(rate.origin)
-        destination_node = registry.lookup(rate.destination)
+        unique_names.update({rate.origin_name, rate.destination_name})
+        origin_node = registry.lookup(rate.origin_name)
+        destination_node = registry.lookup(rate.destination_name)
         if origin_node and destination_node:
             matched_rate_records += 1
             continue
         if origin_node is None:
-            unmatched_names.add(rate.origin)
+            unmatched_names.add(rate.origin_name)
         if destination_node is None:
-            unmatched_names.add(rate.destination)
+            unmatched_names.add(rate.destination_name)
 
     matched_location_names = sum(1 for name in unique_names if registry.lookup(name) is not None)
     unmatched_location_names = len(unique_names) - matched_location_names

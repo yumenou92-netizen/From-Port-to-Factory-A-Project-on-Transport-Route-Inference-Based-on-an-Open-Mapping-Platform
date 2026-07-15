@@ -12,17 +12,17 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .freight_rate import FreightRate, FreightRateError, create_freight_rate
     from .route_request import (
         RequestBillingValidation,
         RouteRequest,
-        evaluate_freight_charge,
         validate_request_billing,
     )
 except ImportError:  # Support direct script-style imports used by demo scripts.
+    from freight_rate import FreightRate, FreightRateError, create_freight_rate
     from route_request import (
         RequestBillingValidation,
         RouteRequest,
-        evaluate_freight_charge,
         validate_request_billing,
     )
 
@@ -45,19 +45,6 @@ class NodeRecord:
 
 
 @dataclass(frozen=True)
-class FreightRate:
-    origin: str
-    destination: str
-    transport_mode: str
-    packaging: str
-    product_scope: str
-    fee: Decimal
-    fee_unit: str
-    price_source: str
-    maintenance_date: str | None = None
-
-
-@dataclass(frozen=True)
 class AdditionalFee:
     node_name: str
     packaging: str
@@ -68,6 +55,7 @@ class AdditionalFee:
 
 @dataclass(frozen=True)
 class EdgeCandidate:
+    rate_id: str
     from_node_id: str | None
     to_node_id: str | None
     origin: str
@@ -75,26 +63,39 @@ class EdgeCandidate:
     transport_mode: str
     packaging: str
     product_scope: str
-    unit_fee: Decimal
-    fee_unit: str
+    raw_price: Decimal
+    raw_price_unit: str
     total_cost: Decimal
     price_source: str
     maintenance_date: str | None
+    price_type: str
+    calculation_rule_id: str
+    calculation_rule_version: str
+    calculation_detail: str
+    source_file: str | None
+    source_row_number: int | None
 
 
 @dataclass(frozen=True)
 class EdgeReviewItem:
+    rate_id: str
     origin: str
     destination: str
     transport_mode: str
     packaging: str
     quantity: str
     quantity_unit: str
-    unit_fee: Decimal
-    fee_unit: str
+    raw_price: Decimal
+    raw_price_unit: str
     price_source: str
     maintenance_date: str | None
     review_reason: str
+    price_type: str
+    calculation_rule_id: str
+    calculation_rule_version: str
+    calculation_detail: str
+    source_file: str | None
+    source_row_number: int | None
 
 
 @dataclass(frozen=True)
@@ -142,13 +143,13 @@ class RealDataBundle:
 
     @property
     def fee_units(self) -> Counter[str]:
-        units = Counter(rate.fee_unit for rate in self.freight_rates)
+        units = Counter(rate.raw_price_unit for rate in self.freight_rates)
         units.update(fee.fee_unit for fee in self.additional_fees)
         return units
 
     @property
     def packaging_types(self) -> Counter[str]:
-        values = Counter(rate.packaging for rate in self.freight_rates)
+        values = Counter(rate.package_type for rate in self.freight_rates)
         values.update(fee.packaging for fee in self.additional_fees)
         return values
 
@@ -171,11 +172,29 @@ def load_real_data_bundle(data_dir: str | Path) -> RealDataBundle:
     rate_rows = read_json_lines(find_required_file(root, REAL_RATE_FILE))
     coordinate_rows = read_json_lines(find_required_file(root, REAL_COORDINATE_FILE))
     additional_fee_rows = read_json_lines(find_required_file(root, REAL_ADDITIONAL_FEE_FILE))
+    nodes = [parse_node_record(row, index) for index, row in enumerate(coordinate_rows, start=1)]
+    try:
+        from .node_registry import build_node_registry
+    except ImportError:  # Support direct script-style imports used by demo scripts.
+        from node_registry import build_node_registry
+
+    node_registry = build_node_registry(nodes)
+    freight_rates = []
+    for index, row in enumerate(rate_rows, start=1):
+        rate = parse_freight_rate(row, index)
+        origin_node = node_registry.lookup(rate.origin_name)
+        destination_node = node_registry.lookup(rate.destination_name)
+        freight_rates.append(
+            rate.bind_node_ids(
+                origin_node.node_id if origin_node else None,
+                destination_node.node_id if destination_node else None,
+            )
+        )
 
     return RealDataBundle(
         data_dir=root,
-        freight_rates=[parse_freight_rate(row, index) for index, row in enumerate(rate_rows, start=1)],
-        nodes=[parse_node_record(row, index) for index, row in enumerate(coordinate_rows, start=1)],
+        freight_rates=freight_rates,
+        nodes=nodes,
         additional_fees=[parse_additional_fee(row, index) for index, row in enumerate(additional_fee_rows, start=1)],
     )
 
@@ -209,17 +228,23 @@ def read_json_lines(path: Path) -> list[dict[str, Any]]:
 def parse_freight_rate(row: dict[str, Any], row_no: int) -> FreightRate:
     required = ["始发", "到达", "运输方式", "包装方式", "适用品种", "费用", "费用单位", "价格来源"]
     require_fields(row, required, REAL_RATE_FILE, row_no)
-    return FreightRate(
-        origin=str(row["始发"]).strip(),
-        destination=str(row["到达"]).strip(),
-        transport_mode=str(row["运输方式"]).strip(),
-        packaging=str(row["包装方式"]).strip(),
-        product_scope=str(row["适用品种"]).strip(),
-        fee=parse_decimal(row["费用"], REAL_RATE_FILE, row_no, "费用"),
-        fee_unit=str(row["费用单位"]).strip(),
-        price_source=str(row["价格来源"]).strip(),
-        maintenance_date=optional_text(row.get("维护日期")),
-    )
+    try:
+        return create_freight_rate(
+            origin_name=parse_required_text(row["始发"], REAL_RATE_FILE, row_no, "始发"),
+            destination_name=parse_required_text(row["到达"], REAL_RATE_FILE, row_no, "到达"),
+            transport_mode=parse_required_text(row["运输方式"], REAL_RATE_FILE, row_no, "运输方式"),
+            package_type=parse_required_text(row["包装方式"], REAL_RATE_FILE, row_no, "包装方式"),
+            commodity_scope=parse_required_text(row["适用品种"], REAL_RATE_FILE, row_no, "适用品种"),
+            raw_price=parse_decimal(row["费用"], REAL_RATE_FILE, row_no, "费用"),
+            raw_price_unit=parse_required_text(row["费用单位"], REAL_RATE_FILE, row_no, "费用单位"),
+            price_type="unit_price",
+            price_source=parse_required_text(row["价格来源"], REAL_RATE_FILE, row_no, "价格来源"),
+            maintained_at=parse_optional_text(row.get("维护日期"), REAL_RATE_FILE, row_no, "维护日期"),
+            source_file=REAL_RATE_FILE,
+            source_row_number=row_no,
+        )
+    except FreightRateError as exc:
+        raise DataLoadError(f"{REAL_RATE_FILE} 第 {row_no} 行费率结构无效: {exc}") from exc
 
 
 def parse_node_record(row: dict[str, Any], row_no: int) -> NodeRecord:
@@ -256,10 +281,18 @@ def is_blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
 
 
-def optional_text(value: Any) -> str | None:
-    if is_blank(value):
+def parse_required_text(value: Any, file_name: str, row_no: int, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DataLoadError(f"{file_name} 第 {row_no} 行字段 {field_name} 必须是非空文本。")
+    return value.strip()
+
+
+def parse_optional_text(value: Any, file_name: str, row_no: int, field_name: str) -> str | None:
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
-    return str(value).strip()
+    if not isinstance(value, str):
+        raise DataLoadError(f"{file_name} 第 {row_no} 行字段 {field_name} 必须是文本或空值。")
+    return value.strip()
 
 
 def parse_decimal(value: Any, file_name: str, row_no: int, field_name: str) -> Decimal:
@@ -316,24 +349,17 @@ def build_order_edge_candidates_for_request(
     if request_validation.requires_manual_review:
         return EdgeBuildResult(candidates=[], request_validation=request_validation)
 
-    nodes = bundle.node_by_name
     candidates: list[EdgeCandidate] = []
     manual_review_items: list[EdgeReviewItem] = []
     skipped_packaging = 0
     skipped_product = 0
 
     for rate in bundle.freight_rates:
-        if not product_matches(request.commodity, rate.product_scope):
+        if not rate.supports_commodity(request.commodity):
             skipped_product += 1
             continue
 
-        evaluation = evaluate_freight_charge(
-            request,
-            transport_mode=rate.transport_mode,
-            rate_packaging=rate.packaging,
-            raw_price=rate.fee,
-            price_unit=rate.fee_unit,
-        )
+        evaluation = rate.evaluate_for_request(request)
         if evaluation.status == "not_applicable":
             skipped_packaging += 1
             continue
@@ -344,6 +370,9 @@ def build_order_edge_candidates_for_request(
                     request.quantity,
                     request.quantity_unit,
                     evaluation.message,
+                    evaluation.rule_id,
+                    evaluation.rule_version,
+                    evaluation.calculation_detail,
                 )
             )
             continue
@@ -351,22 +380,27 @@ def build_order_edge_candidates_for_request(
             raise DataLoadError("有效运价评估缺少运输段总费用。")
         total_cost = evaluation.total_cost
 
-        origin_node = nodes.get(rate.origin)
-        destination_node = nodes.get(rate.destination)
         candidates.append(
             EdgeCandidate(
-                from_node_id=origin_node.node_id if origin_node else None,
-                to_node_id=destination_node.node_id if destination_node else None,
-                origin=rate.origin,
-                destination=rate.destination,
+                rate_id=rate.rate_id,
+                from_node_id=rate.from_node_id,
+                to_node_id=rate.to_node_id,
+                origin=rate.origin_name,
+                destination=rate.destination_name,
                 transport_mode=rate.transport_mode,
-                packaging=rate.packaging,
-                product_scope=rate.product_scope,
-                unit_fee=rate.fee,
-                fee_unit=rate.fee_unit,
+                packaging=rate.package_type,
+                product_scope=rate.commodity_scope,
+                raw_price=rate.raw_price,
+                raw_price_unit=rate.raw_price_unit,
                 total_cost=total_cost,
                 price_source=rate.price_source,
-                maintenance_date=rate.maintenance_date,
+                maintenance_date=rate.maintained_at.isoformat() if rate.maintained_at else None,
+                price_type=rate.price_type,
+                calculation_rule_id=evaluation.rule_id,
+                calculation_rule_version=evaluation.rule_version,
+                calculation_detail=evaluation.calculation_detail,
+                source_file=rate.source_file,
+                source_row_number=rate.source_row_number,
             )
         )
 
@@ -384,30 +418,35 @@ def make_edge_review_item(
     quantity: int | float | str | Decimal,
     quantity_unit: str,
     review_reason: str,
+    calculation_rule_id: str,
+    calculation_rule_version: str,
+    calculation_detail: str,
 ) -> EdgeReviewItem:
     return EdgeReviewItem(
-        origin=rate.origin,
-        destination=rate.destination,
+        rate_id=rate.rate_id,
+        origin=rate.origin_name,
+        destination=rate.destination_name,
         transport_mode=rate.transport_mode,
-        packaging=rate.packaging,
+        packaging=rate.package_type,
         quantity=str(quantity),
         quantity_unit=str(quantity_unit).strip(),
-        unit_fee=rate.fee,
-        fee_unit=rate.fee_unit,
+        raw_price=rate.raw_price,
+        raw_price_unit=rate.raw_price_unit,
         price_source=rate.price_source,
-        maintenance_date=rate.maintenance_date,
+        maintenance_date=rate.maintained_at.isoformat() if rate.maintained_at else None,
         review_reason=review_reason,
+        price_type=rate.price_type,
+        calculation_rule_id=calculation_rule_id,
+        calculation_rule_version=calculation_rule_version,
+        calculation_detail=calculation_detail,
+        source_file=rate.source_file,
+        source_row_number=rate.source_row_number,
     )
-
-
-def product_matches(product: str, product_scope: str) -> bool:
-    product_value = product.strip()
-    allowed = {item.strip() for item in re.split(r"[,，、/]+", product_scope) if item.strip()}
-    return product_value in allowed
 
 
 def edge_candidate_to_row(candidate: EdgeCandidate) -> dict[str, Any]:
     return {
+        "rate_id": candidate.rate_id,
         "from_node_id": candidate.from_node_id,
         "to_node_id": candidate.to_node_id,
         "origin": candidate.origin,
@@ -415,16 +454,23 @@ def edge_candidate_to_row(candidate: EdgeCandidate) -> dict[str, Any]:
         "transport_mode": candidate.transport_mode,
         "packaging": candidate.packaging,
         "product_scope": candidate.product_scope,
-        "unit_fee": str(candidate.unit_fee),
-        "fee_unit": candidate.fee_unit,
+        "raw_price": str(candidate.raw_price),
+        "raw_price_unit": candidate.raw_price_unit,
         "total_cost": str(candidate.total_cost),
         "price_source": candidate.price_source,
         "maintenance_date": candidate.maintenance_date or "",
+        "price_type": candidate.price_type,
+        "calculation_rule_id": candidate.calculation_rule_id,
+        "calculation_rule_version": candidate.calculation_rule_version,
+        "calculation_detail": candidate.calculation_detail,
+        "source_file": candidate.source_file or "",
+        "source_row_number": candidate.source_row_number or "",
     }
 
 
 def edge_review_item_to_row(item: EdgeReviewItem) -> dict[str, Any]:
     return {
+        "rate_id": item.rate_id,
         "validation_status": "manual_review",
         "validation_scope": "freight_rate",
         "origin": item.origin,
@@ -433,11 +479,17 @@ def edge_review_item_to_row(item: EdgeReviewItem) -> dict[str, Any]:
         "packaging": item.packaging,
         "quantity": item.quantity,
         "quantity_unit": item.quantity_unit,
-        "unit_fee": str(item.unit_fee),
-        "fee_unit": item.fee_unit,
+        "raw_price": str(item.raw_price),
+        "raw_price_unit": item.raw_price_unit,
         "price_source": item.price_source,
         "maintenance_date": item.maintenance_date or "",
         "review_reason": item.review_reason,
+        "price_type": item.price_type,
+        "calculation_rule_id": item.calculation_rule_id,
+        "calculation_rule_version": item.calculation_rule_version,
+        "calculation_detail": item.calculation_detail,
+        "source_file": item.source_file or "",
+        "source_row_number": item.source_row_number or "",
     }
 
 
@@ -446,6 +498,7 @@ def build_review_rows(result: EdgeBuildResult, request: RouteRequest) -> list[di
     if result.request_validation.requires_manual_review:
         rows.append(
             {
+                "rate_id": "",
                 "validation_status": "manual_review",
                 "validation_scope": "request",
                 "origin": "",
@@ -454,11 +507,17 @@ def build_review_rows(result: EdgeBuildResult, request: RouteRequest) -> list[di
                 "packaging": request.package_type,
                 "quantity": str(request.quantity),
                 "quantity_unit": request.quantity_unit,
-                "unit_fee": "",
-                "fee_unit": "",
+                "raw_price": "",
+                "raw_price_unit": "",
                 "price_source": "",
                 "maintenance_date": "",
                 "review_reason": "；".join(result.request_validation.issues),
+                "price_type": "",
+                "calculation_rule_id": "",
+                "calculation_rule_version": "",
+                "calculation_detail": "",
+                "source_file": "",
+                "source_row_number": "",
             }
         )
     rows.extend(edge_review_item_to_row(item) for item in result.manual_review_items)

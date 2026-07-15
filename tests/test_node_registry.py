@@ -1,6 +1,7 @@
 from decimal import Decimal
 
-from src.data_loaders import FreightRate, NodeRecord, make_node_id
+from src.data_loaders import NodeRecord, make_node_id
+from src.freight_rate import FreightRate, create_freight_rate
 from src.node_registry import (
     AliasRule,
     analyze_freight_rate_node_coverage,
@@ -105,13 +106,14 @@ def test_analyze_freight_rate_node_coverage_reports_unmatched_locations():
 
 
 def make_rate(origin: str, destination: str) -> FreightRate:
-    return FreightRate(
-        origin=origin,
-        destination=destination,
+    return create_freight_rate(
+        origin_name=origin,
+        destination_name=destination,
         transport_mode="汽运",
-        packaging="散粮",
-        product_scope="玉米、小麦",
-        fee=Decimal("10"),
-        fee_unit="元/吨",
+        package_type="散粮",
+        commodity_scope="玉米、小麦",
+        raw_price=Decimal("10"),
+        raw_price_unit="元/吨",
+        price_type="unit_price",
         price_source="测试来源",
     )
