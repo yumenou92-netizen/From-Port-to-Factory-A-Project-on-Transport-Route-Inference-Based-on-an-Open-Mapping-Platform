@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from cost_rules import DEFAULT_COST_RULE_ENGINE
+from freight_rate import create_freight_rate
 from route_request import RouteRequest
 from unit_conversion import UnitConversionError, calculate_total_cost
 
@@ -16,6 +17,7 @@ def main() -> None:
     show_bulk_shipping_index_case()
     show_manual_quote_case()
     show_invalid_unit_case()
+    show_truck_route_policy()
     show_current_boundary()
 
 
@@ -95,11 +97,40 @@ def show_invalid_unit_case() -> None:
     print("结论：系统不会把吨和箱直接相乘，避免错误费用进入路径推荐。")
 
 
+def show_truck_route_policy() -> None:
+    print("\n六、场景 5：最后一公里汽运规则修正")
+    print("业务口径：熟悉路线优先取维护运价；陌生散粮规则已修订为草案但暂不启用。")
+
+    request = RouteRequest(500, "吨", "散粮", "测试粮种")
+    known_rate = create_freight_rate(
+        origin_name="测试南港",
+        destination_name="测试客户工厂",
+        transport_mode="汽运",
+        package_type="散粮",
+        commodity_scope="测试粮种",
+        raw_price=20,
+        raw_price_unit="元/吨",
+        price_type="unit_price",
+        price_source="测试既定汽运运价",
+        maintained_at="2026-04-15",
+    )
+    known_result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(
+        request,
+        known_rate=known_rate,
+    )
+    unknown_result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(request)
+
+    print(f"熟悉路线：{known_result.calculation_detail}")
+    print(f"熟悉路线总费用：{known_result.total_cost_yuan}元")
+    print(f"陌生路线：{unknown_result.message}")
+    print("结论：没有既定运价时，当前不会把陌生汽运草案自动用于推荐。")
+
+
 def show_current_boundary() -> None:
-    print("\n六、当前边界")
+    print("\n七、当前边界")
     print("当前 demo 展示的是费用计算防错能力。")
-    print("它尚未接入完整路径搜索、客户自有码头规则、腾讯地图距离和最后一公里陌生路线计费。")
-    print("统一结果已经接入 FreightRate 和候选边；TransportEdge、地图距离和陌生路线规则仍待开发。")
+    print("它尚未接入完整路径搜索、客户自有码头规则和腾讯地图距离。")
+    print("统一结果已经接入 FreightRate 和候选边；TransportEdge、最新运价选择和时效接口仍待开发。")
 
 
 if __name__ == "__main__":

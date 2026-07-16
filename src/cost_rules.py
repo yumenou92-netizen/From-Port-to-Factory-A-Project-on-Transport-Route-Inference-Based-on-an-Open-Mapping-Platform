@@ -109,6 +109,19 @@ FREIGHT_RATE_TOTAL_PRICE_RULE = CostRuleConfig(
     enabled=True,
 )
 
+KNOWN_TRUCK_MAINTAINED_RATE_RULE = CostRuleConfig(
+    rule_id="known_truck_maintained_rate",
+    rule_version="1.0",
+    rule_name="熟悉汽运路线既定运价",
+    rule_type="maintained_truck_rate",
+    enabled=True,
+    parameters={
+        "route_policy": "freight_rate_first",
+        "required_transport_mode": "汽运",
+        "next_step": "latest_rate_selection",
+    },
+)
+
 BULK_SHIPPING_INDEX_RULE = CostRuleConfig(
     rule_id="bulk_shipping_index",
     rule_version="1.0",
@@ -149,18 +162,28 @@ BULK_SHIPPING_MANUAL_VALIDATION_RULE = CostRuleConfig(
 
 UNKNOWN_TRUCK_BULK_RULE = CostRuleConfig(
     rule_id="unknown_truck_bulk_distance_tier",
-    rule_version="draft-1",
+    rule_version="draft-2",
     rule_name="陌生汽运路线散粮阶梯计费",
     rule_type="distance_tier",
     enabled=False,
     parameters={
-        "within_20_km_yuan_per_ton": Decimal("15"),
-        "20_to_30_km_yuan_per_ton": Decimal("20"),
-        "30_to_100_yuan_per_ton_km": Decimal("0.5"),
-        "100_to_150_yuan_per_ton_km": Decimal("0.4"),
-        "over_150_yuan_per_ton_km": Decimal("0.3"),
+        "requires_distance_provider": True,
+        "distance_unit": "km",
+        "result_unit": "元/吨",
+        "total_cost_formula": "unit_price_yuan_per_ton * quantity_tons",
+        "segments": (
+            {"max_km": Decimal("20"), "formula": "15"},
+            {"max_km": Decimal("30"), "formula": "20"},
+            {"max_km": Decimal("100"), "formula": "20 + (x - 30) * 0.7"},
+            {"max_km": Decimal("150"), "formula": "69 + (x - 100) * 0.6"},
+            {"max_km": Decimal("250"), "formula": "99 + (x - 150) * 0.5"},
+            {"max_km": None, "formula": "149 + (x - 250) * 0.3"},
+        ),
     },
-    disabled_reason="等待道路距离 Provider 和正式业务验收，当前不得参与推荐。",
+    disabled_reason=(
+        "等待腾讯地图 DistanceProvider、最新运价选择器、业务验收和边界测试完成后启用；"
+        "当前不得参与自动推荐。"
+    ),
 )
 
 UNKNOWN_TRUCK_CONTAINER_RULE = CostRuleConfig(
@@ -170,16 +193,26 @@ UNKNOWN_TRUCK_CONTAINER_RULE = CostRuleConfig(
     rule_type="distance_formula",
     enabled=False,
     parameters={
+        "requires_distance_provider": True,
+        "distance_unit": "km",
+        "price_unit": "元/箱",
         "within_20_km_yuan_per_box": Decimal("500"),
-        "over_20_formula": "500-(distance_km-20)*30*0.55",
+        "over_20_formula_text": "500-(distance_km-20)*30*0.55",
+        "over_20_formula_status": "requires_business_reconfirmation",
+        "ton_per_box_reference": Decimal("30"),
+        "unit_conversion_status": "do_not_auto_convert_box_to_ton",
     },
-    disabled_reason="20 公里以上公式方向尚未确认，当前不得参与推荐。",
+    disabled_reason=(
+        "无既定汽运运价时才可考虑该草案；20 公里以上公式方向和箱吨换算口径"
+        "均待业务复核，当前不得参与自动推荐。"
+    ),
 )
 
 
 DEFAULT_COST_RULES = (
     FREIGHT_RATE_UNIT_PRICE_RULE,
     FREIGHT_RATE_TOTAL_PRICE_RULE,
+    KNOWN_TRUCK_MAINTAINED_RATE_RULE,
     BULK_SHIPPING_INDEX_RULE,
     BULK_SHIPPING_MANUAL_UNIT_RULE,
     BULK_SHIPPING_MANUAL_TOTAL_RULE,
@@ -260,6 +293,58 @@ class CostRuleEngine:
             )
 
         return self._evaluate_freight_rate_total_price(rule, rate, request)
+
+    def calculate_last_mile_truck(
+        self,
+        request: RouteRequest,
+        *,
+        known_rate: FreightRate | None = None,
+        price_source: str = "最后一公里汽运规则",
+    ) -> CostCalculationResult:
+        """Evaluate last-mile truck cost under the current business boundary.
+
+        Known truck routes use maintained freight rates. Unknown truck routes
+        are recorded as draft rules and must not auto-calculate until a distance
+        provider and business-confirmed formulas are available.
+        """
+        if known_rate is not None:
+            rule = self.require_enabled(KNOWN_TRUCK_MAINTAINED_RATE_RULE.rule_id)
+            if not is_truck_transport_mode(known_rate.transport_mode):
+                message = f"该运价运输方式为 {known_rate.transport_mode}，不是汽运既定路线。"
+                return self._result(
+                    rule,
+                    "not_applicable",
+                    known_rate,
+                    None,
+                    f"未计算：{message}",
+                    message,
+                )
+
+            freight_result = self.evaluate_freight_rate(known_rate, request)
+            detail = (
+                f"熟悉汽运路线使用维护运价；"
+                f"原计费规则={freight_result.rule_id}/{freight_result.rule_version}；"
+                f"{freight_result.calculation_detail}"
+            )
+            message = (
+                "已按熟悉汽运路线维护运价计算当前订单运输段总费用。"
+                if freight_result.status == "valid"
+                else freight_result.message
+            )
+            return CostCalculationResult(
+                status=freight_result.status,
+                total_cost_yuan=freight_result.total_cost_yuan,
+                rule_id=rule.rule_id,
+                rule_version=rule.rule_version,
+                calculation_detail=detail,
+                price_source=known_rate.price_source,
+                transport_mode=known_rate.transport_mode,
+                rate_packaging=known_rate.package_type,
+                price_unit=known_rate.raw_price_unit,
+                message=message,
+            )
+
+        return self._unknown_truck_review(request, price_source)
 
     def calculate_bulk_shipping(
         self,
@@ -454,6 +539,43 @@ class CostRuleEngine:
             message=message,
         )
 
+    def _unknown_truck_review(
+        self,
+        request: RouteRequest,
+        price_source: str,
+    ) -> CostCalculationResult:
+        if request.package_type == "散粮":
+            rule = self.get_rule(UNKNOWN_TRUCK_BULK_RULE.rule_id)
+            message = (
+                "未找到既定汽运运价；陌生汽运散粮规则仅作为草案登记，"
+                "需要 DistanceProvider 提供公路距离并完成业务验收后才能计算。"
+            )
+            price_unit = "元/吨"
+        elif request.package_type == "集装箱":
+            rule = self.get_rule(UNKNOWN_TRUCK_CONTAINER_RULE.rule_id)
+            message = (
+                "未找到既定汽运运价；陌生汽运集装箱规则仅作为草案登记，"
+                "20 公里以上公式方向和箱吨换算口径待业务复核，当前不能计算。"
+            )
+            price_unit = "元/箱"
+        else:
+            rule = self.get_rule(UNKNOWN_TRUCK_BULK_RULE.rule_id)
+            message = f"包装方式 {request.package_type} 暂无陌生汽运规则，请人工确认。"
+            price_unit = ""
+
+        return CostCalculationResult(
+            status="manual_review",
+            total_cost_yuan=None,
+            rule_id=rule.rule_id,
+            rule_version=rule.rule_version,
+            calculation_detail=f"未计算：{message}",
+            price_source=price_source,
+            transport_mode="汽运",
+            rate_packaging=request.package_type,
+            price_unit=price_unit,
+            message=message,
+        )
+
 
 DEFAULT_COST_RULE_ENGINE = CostRuleEngine()
 
@@ -600,6 +722,11 @@ def calculate_railway_cost(
 
 def calculate_truck_cost(distance: float, rate_per_km: float, minimum_fee: float = 0) -> float:
     return max(distance * rate_per_km, minimum_fee)
+
+
+def is_truck_transport_mode(value: str) -> bool:
+    normalized = str(value).strip().replace(" ", "")
+    return normalized in {"汽运", "汽车运输", "公路运输"}
 
 
 def _to_decimal(value: int | float | str | Decimal, field_name: str) -> Decimal:

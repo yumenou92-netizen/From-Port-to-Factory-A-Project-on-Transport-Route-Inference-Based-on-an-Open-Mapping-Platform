@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
     from .freight_rate import FreightRate, FreightRateError, create_freight_rate
     from .route_request import (
         RequestBillingValidation,
@@ -19,6 +20,7 @@ try:
         validate_request_billing,
     )
 except ImportError:  # Support direct script-style imports used by demo scripts.
+    from cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
     from freight_rate import FreightRate, FreightRateError, create_freight_rate
     from route_request import (
         RequestBillingValidation,
@@ -359,7 +361,11 @@ def build_order_edge_candidates_for_request(
             skipped_product += 1
             continue
 
-        evaluation = rate.evaluate_for_request(request)
+        evaluation = (
+            DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(request, known_rate=rate)
+            if is_truck_transport_mode(rate.transport_mode)
+            else rate.evaluate_for_request(request)
+        )
         if evaluation.status == "not_applicable":
             skipped_packaging += 1
             continue

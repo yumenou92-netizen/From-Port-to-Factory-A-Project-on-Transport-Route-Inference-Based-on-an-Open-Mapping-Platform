@@ -93,6 +93,27 @@ def test_build_order_edge_candidates_uses_route_request_and_preserves_transport_
     assert len(result.manual_review_items) == 1
 
 
+def test_build_order_edge_candidates_uses_known_truck_policy_for_truck_rates(tmp_path):
+    data_dir = write_real_data_fixture(tmp_path)
+    rows = base_rate_rows()
+    rows[0]["运输方式"] = "汽运"
+    write_json_lines(data_dir / "运价表.json", rows)
+    bundle = load_real_data_bundle(data_dir)
+
+    result = build_order_edge_candidates(
+        bundle,
+        quantity=500,
+        quantity_unit="吨",
+        packaging="散粮",
+        product="玉米",
+    )
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].transport_mode == "汽运"
+    assert result.candidates[0].calculation_rule_id == "known_truck_maintained_rate"
+    assert "熟悉汽运路线使用维护运价" in result.candidates[0].calculation_detail
+
+
 def test_invalid_request_billing_stops_candidate_generation(tmp_path):
     bundle = load_real_data_bundle(write_real_data_fixture(tmp_path))
     request = RouteRequest(

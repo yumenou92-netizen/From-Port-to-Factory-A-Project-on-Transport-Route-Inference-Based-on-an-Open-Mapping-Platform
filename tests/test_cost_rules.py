@@ -8,6 +8,7 @@ from src.cost_rules import (
     DEFAULT_COST_RULE_ENGINE,
     FREIGHT_RATE_TOTAL_PRICE_RULE,
     FREIGHT_RATE_UNIT_PRICE_RULE,
+    KNOWN_TRUCK_MAINTAINED_RATE_RULE,
     UNKNOWN_TRUCK_BULK_RULE,
     UNKNOWN_TRUCK_CONTAINER_RULE,
     CostCalculationResult,
@@ -22,6 +23,7 @@ from src.cost_rules import (
     calculate_manual_shipping_cost,
     calculate_railway_cost,
 )
+from src.freight_rate import create_freight_rate
 from src.route_request import RouteRequest
 
 
@@ -337,6 +339,88 @@ def test_freight_rate_rules_are_registered_as_enabled():
     assert DEFAULT_COST_RULE_ENGINE.get_rule(FREIGHT_RATE_TOTAL_PRICE_RULE.rule_id).enabled
 
 
+def test_known_truck_route_uses_maintained_freight_rate_with_trace():
+    request = RouteRequest(500, "吨", "散粮", "测试粮种")
+    rate = create_freight_rate(
+        origin_name="测试南港",
+        destination_name="测试工厂",
+        transport_mode="汽运",
+        package_type="散粮",
+        commodity_scope="测试粮种",
+        raw_price=20,
+        raw_price_unit="元/吨",
+        price_type="unit_price",
+        price_source="测试既定汽运运价",
+        maintained_at="2026-04-15",
+    )
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(request, known_rate=rate)
+
+    assert result.status == "valid"
+    assert result.total_cost_yuan == Decimal("10000")
+    assert result.rule_id == KNOWN_TRUCK_MAINTAINED_RATE_RULE.rule_id
+    assert result.rule_version == "1.0"
+    assert result.price_source == "测试既定汽运运价"
+    assert "熟悉汽运路线使用维护运价" in result.calculation_detail
+    assert "freight_rate_unit_price/1.0" in result.calculation_detail
+
+
+def test_known_truck_route_rejects_non_truck_rate():
+    request = RouteRequest(500, "吨", "散粮", "测试粮种")
+    rate = create_freight_rate(
+        origin_name="测试南港",
+        destination_name="测试工厂",
+        transport_mode="驳船",
+        package_type="散粮",
+        commodity_scope="测试粮种",
+        raw_price=20,
+        raw_price_unit="元/吨",
+        price_type="unit_price",
+        price_source="测试非汽运运价",
+    )
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(request, known_rate=rate)
+
+    assert result.status == "not_applicable"
+    assert result.total_cost_yuan is None
+    assert result.rule_id == KNOWN_TRUCK_MAINTAINED_RATE_RULE.rule_id
+    assert "不是汽运既定路线" in result.message
+
+
+@pytest.mark.parametrize(
+    ("package_type", "quantity_unit", "expected_rule", "expected_message", "expected_unit"),
+    [
+        ("散粮", "吨", "unknown_truck_bulk_distance_tier", "DistanceProvider", "元/吨"),
+        ("集装箱", "箱", "unknown_truck_container_distance", "公式方向", "元/箱"),
+    ],
+)
+def test_unknown_truck_route_returns_manual_review_without_cost(
+    package_type,
+    quantity_unit,
+    expected_rule,
+    expected_message,
+    expected_unit,
+):
+    request = RouteRequest(500, quantity_unit, package_type, "测试粮种")
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(request)
+
+    assert result.status == "manual_review"
+    assert result.total_cost_yuan is None
+    assert result.rule_id == expected_rule
+    assert result.price_unit == expected_unit
+    assert expected_message in result.message
+    assert "未计算" in result.calculation_detail
+
+
+def test_known_truck_rule_is_registered_as_enabled():
+    registered = DEFAULT_COST_RULE_ENGINE.get_rule(KNOWN_TRUCK_MAINTAINED_RATE_RULE.rule_id)
+
+    assert registered.enabled
+    assert registered.parameters["route_policy"] == "freight_rate_first"
+    assert registered.parameters["next_step"] == "latest_rate_selection"
+
+
 @pytest.mark.parametrize(
     "rule",
     [UNKNOWN_TRUCK_BULK_RULE, UNKNOWN_TRUCK_CONTAINER_RULE],
@@ -354,8 +438,33 @@ def test_unknown_truck_rules_are_registered_but_cannot_execute(rule):
 def test_unknown_truck_rule_ids_and_versions_are_stable():
     assert UNKNOWN_TRUCK_BULK_RULE.rule_id == "unknown_truck_bulk_distance_tier"
     assert UNKNOWN_TRUCK_CONTAINER_RULE.rule_id == "unknown_truck_container_distance"
-    assert UNKNOWN_TRUCK_BULK_RULE.rule_version == "draft-1"
+    assert UNKNOWN_TRUCK_BULK_RULE.rule_version == "draft-2"
     assert UNKNOWN_TRUCK_CONTAINER_RULE.rule_version == "draft-1"
+    assert UNKNOWN_TRUCK_BULK_RULE.parameters["requires_distance_provider"] is True
+    assert UNKNOWN_TRUCK_BULK_RULE.parameters["result_unit"] == "元/吨"
+    assert UNKNOWN_TRUCK_BULK_RULE.parameters["total_cost_formula"] == (
+        "unit_price_yuan_per_ton * quantity_tons"
+    )
+    assert UNKNOWN_TRUCK_CONTAINER_RULE.parameters["over_20_formula_status"] == (
+        "requires_business_reconfirmation"
+    )
+    assert UNKNOWN_TRUCK_CONTAINER_RULE.parameters["unit_conversion_status"] == (
+        "do_not_auto_convert_box_to_ton"
+    )
+
+
+def test_unknown_truck_bulk_draft_2_segments_are_recorded():
+    segments = UNKNOWN_TRUCK_BULK_RULE.parameters["segments"]
+
+    assert segments == (
+        {"max_km": Decimal("20"), "formula": "15"},
+        {"max_km": Decimal("30"), "formula": "20"},
+        {"max_km": Decimal("100"), "formula": "20 + (x - 30) * 0.7"},
+        {"max_km": Decimal("150"), "formula": "69 + (x - 100) * 0.6"},
+        {"max_km": Decimal("250"), "formula": "99 + (x - 150) * 0.5"},
+        {"max_km": None, "formula": "149 + (x - 250) * 0.3"},
+    )
+    assert "边界测试" in UNKNOWN_TRUCK_BULK_RULE.disabled_reason
 
 
 def test_cost_rule_registry_rejects_duplicate_rule_ids():
