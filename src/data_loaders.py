@@ -14,6 +14,13 @@ from typing import Any
 try:
     from .cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
     from .freight_rate import FreightRate, FreightRateError, create_freight_rate
+    from .latest_rate_selector import (
+        LATEST_RATE_RULE_ID,
+        LATEST_RATE_RULE_VERSION,
+        LatestRateSelectionIssue,
+        effective_maintained_at,
+        select_latest_freight_rates,
+    )
     from .route_request import (
         RequestBillingValidation,
         RouteRequest,
@@ -22,6 +29,13 @@ try:
 except ImportError:  # Support direct script-style imports used by demo scripts.
     from cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
     from freight_rate import FreightRate, FreightRateError, create_freight_rate
+    from latest_rate_selector import (
+        LATEST_RATE_RULE_ID,
+        LATEST_RATE_RULE_VERSION,
+        LatestRateSelectionIssue,
+        effective_maintained_at,
+        select_latest_freight_rates,
+    )
     from route_request import (
         RequestBillingValidation,
         RouteRequest,
@@ -70,6 +84,8 @@ class EdgeCandidate:
     total_cost: Decimal
     price_source: str
     maintenance_date: str | None
+    effective_maintenance_date: str
+    maintenance_date_defaulted: bool
     price_type: str
     calculation_rule_id: str
     calculation_rule_version: str
@@ -91,6 +107,8 @@ class EdgeReviewItem:
     raw_price_unit: str
     price_source: str
     maintenance_date: str | None
+    effective_maintenance_date: str
+    maintenance_date_defaulted: bool
     review_reason: str
     price_type: str
     calculation_rule_id: str
@@ -109,6 +127,9 @@ class EdgeBuildResult:
     skipped_packaging: int = 0
     skipped_product: int = 0
     manual_review_items: list[EdgeReviewItem] = field(default_factory=list)
+    superseded_rate_count: int = 0
+    duplicate_rate_count: int = 0
+    defaulted_maintenance_date_count: int = 0
 
     @property
     def manual_review_count(self) -> int:
@@ -354,13 +375,16 @@ def build_order_edge_candidates_for_request(
     candidates: list[EdgeCandidate] = []
     manual_review_items: list[EdgeReviewItem] = []
     skipped_packaging = 0
-    skipped_product = 0
+    applicable_rates = [
+        rate for rate in bundle.freight_rates if rate.supports_commodity(request.commodity)
+    ]
+    skipped_product = len(bundle.freight_rates) - len(applicable_rates)
+    selection = select_latest_freight_rates(applicable_rates)
 
-    for rate in bundle.freight_rates:
-        if not rate.supports_commodity(request.commodity):
-            skipped_product += 1
-            continue
+    for issue in selection.review_issues:
+        manual_review_items.extend(make_latest_rate_review_items(issue, request))
 
+    for rate in selection.selected_rates:
         evaluation = (
             DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(request, known_rate=rate)
             if is_truck_transport_mode(rate.transport_mode)
@@ -401,6 +425,8 @@ def build_order_edge_candidates_for_request(
                 total_cost=total_cost,
                 price_source=rate.price_source,
                 maintenance_date=rate.maintained_at.isoformat() if rate.maintained_at else None,
+                effective_maintenance_date=effective_maintained_at(rate).isoformat(),
+                maintenance_date_defaulted=rate.maintained_at is None,
                 price_type=rate.price_type,
                 calculation_rule_id=evaluation.rule_id,
                 calculation_rule_version=evaluation.rule_version,
@@ -416,7 +442,28 @@ def build_order_edge_candidates_for_request(
         skipped_packaging=skipped_packaging,
         skipped_product=skipped_product,
         manual_review_items=manual_review_items,
+        superseded_rate_count=selection.superseded_rate_count,
+        duplicate_rate_count=selection.duplicate_rate_count,
+        defaulted_maintenance_date_count=selection.defaulted_date_count,
     )
+
+
+def make_latest_rate_review_items(
+    issue: LatestRateSelectionIssue,
+    request: RouteRequest,
+) -> list[EdgeReviewItem]:
+    return [
+        make_edge_review_item(
+            rate,
+            request.quantity,
+            request.quantity_unit,
+            issue.message,
+            LATEST_RATE_RULE_ID,
+            LATEST_RATE_RULE_VERSION,
+            f"最新运价选择未通过：{issue.code}。{issue.message}",
+        )
+        for rate in issue.rates
+    ]
 
 
 def make_edge_review_item(
@@ -440,6 +487,8 @@ def make_edge_review_item(
         raw_price_unit=rate.raw_price_unit,
         price_source=rate.price_source,
         maintenance_date=rate.maintained_at.isoformat() if rate.maintained_at else None,
+        effective_maintenance_date=effective_maintained_at(rate).isoformat(),
+        maintenance_date_defaulted=rate.maintained_at is None,
         review_reason=review_reason,
         price_type=rate.price_type,
         calculation_rule_id=calculation_rule_id,
@@ -465,6 +514,8 @@ def edge_candidate_to_row(candidate: EdgeCandidate) -> dict[str, Any]:
         "total_cost": str(candidate.total_cost),
         "price_source": candidate.price_source,
         "maintenance_date": candidate.maintenance_date or "",
+        "effective_maintenance_date": candidate.effective_maintenance_date,
+        "maintenance_date_defaulted": candidate.maintenance_date_defaulted,
         "price_type": candidate.price_type,
         "calculation_rule_id": candidate.calculation_rule_id,
         "calculation_rule_version": candidate.calculation_rule_version,
@@ -489,6 +540,8 @@ def edge_review_item_to_row(item: EdgeReviewItem) -> dict[str, Any]:
         "raw_price_unit": item.raw_price_unit,
         "price_source": item.price_source,
         "maintenance_date": item.maintenance_date or "",
+        "effective_maintenance_date": item.effective_maintenance_date,
+        "maintenance_date_defaulted": item.maintenance_date_defaulted,
         "review_reason": item.review_reason,
         "price_type": item.price_type,
         "calculation_rule_id": item.calculation_rule_id,
@@ -517,6 +570,8 @@ def build_review_rows(result: EdgeBuildResult, request: RouteRequest) -> list[di
                 "raw_price_unit": "",
                 "price_source": "",
                 "maintenance_date": "",
+                "effective_maintenance_date": "",
+                "maintenance_date_defaulted": "",
                 "review_reason": "；".join(result.request_validation.issues),
                 "price_type": "",
                 "calculation_rule_id": "",

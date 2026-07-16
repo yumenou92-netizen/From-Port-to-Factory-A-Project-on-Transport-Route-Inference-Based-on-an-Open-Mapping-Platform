@@ -15,10 +15,11 @@ flowchart TD
     D --> D2["coordinate_provider.py"]
     D2 --> D3["tencent_map_provider.py"]
     C --> E["freight_rate.py"]
+    E --> E2["latest_rate_selector.py"]
 
     F["route_request.py"] --> G["unit_conversion.py"]
     G --> H["cost_rules.py"]
-    E --> H
+    E2 --> H
 
     D2 --> I["EdgeCandidate in data_loaders.py"]
     H --> I
@@ -40,7 +41,7 @@ flowchart TD
     B --> D["node_registry.py<br/>standard node ids"]
     D --> D2["coordinate_provider.py<br/>local-first coordinate confirmation"]
     B --> E["freight_rate.py<br/>FreightRate"]
-    E --> E2["latest_rate_selector.py<br/>planned"]
+    E --> E2["latest_rate_selector.py<br/>latest valid maintained rate"]
 
     F["route_request.py<br/>RouteRequest"] --> G["unit_conversion.py"]
     G --> H["cost_rules.py<br/>CostRuleEngine"]
@@ -132,12 +133,17 @@ Rule:
 Files:
 
 - `src/freight_rate.py`
+- `src/latest_rate_selector.py`
 - `src/cost_rules.py`
 
 Responsibilities:
 
 - represent maintained freight rates;
 - preserve raw price, unit, source, maintenance date, and endpoint ids;
+- select the latest unambiguous record for each business route before billing;
+- preserve raw missing dates while using `1970-01-01` only as the internal comparison baseline;
+- expose whether the effective maintenance date was defaulted for downstream explanation;
+- preserve same-effective-date conflict records as manual-review evidence;
 - calculate traceable cost results;
 - return `valid`, `not_applicable`, or `manual_review`.
 

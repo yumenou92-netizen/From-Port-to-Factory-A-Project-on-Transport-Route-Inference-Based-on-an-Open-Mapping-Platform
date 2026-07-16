@@ -31,6 +31,15 @@ This changelog records actual engineering changes. It is not a leader-facing dai
   - `src/demo_tencent_map_probe.py` provides an optional local API smoke test;
   - API key is read only from `TENCENT_MAP_API_KEY`;
   - truck-route adapter remains optional future enhancement, while normal driving route is the current default for road distance/time.
+- Added latest freight-rate selection:
+  - `src/latest_rate_selector.py` groups records by `FreightRate.business_route_key`;
+  - only the latest unambiguous dated record enters candidate billing;
+  - raw missing dates remain empty but use `1970-01-01` as a traceable internal comparison baseline;
+  - normally dated records supersede undated historical records, while same-effective-date conflicts remain manual-review items;
+  - candidate and review exports distinguish raw maintenance date, effective comparison date, and whether the date was defaulted;
+  - exact duplicate latest records are deterministically reduced to one candidate record;
+  - `data_loaders.py` preserves full loaded history while filtering candidate generation;
+  - `demo_leader.py latest-rate` provides a sanitized business-facing demonstration.
 
 ### Notes
 

@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from demo_leader_cost_rules import main as run_cost_rules_demo
 from demo_leader_freight_rate import main as run_freight_rate_demo
+from demo_leader_latest_rate import main as run_latest_rate_demo
 from demo_leader_node_registry import main as run_node_registry_demo
 from demo_leader_real_data import main as run_real_data_demo
 from demo_leader_route_request import main as run_route_request_demo
@@ -14,6 +15,7 @@ DemoRunner = Callable[[], None]
 
 
 LEADER_DEMOS: dict[str, tuple[str, DemoRunner]] = {
+    "latest-rate": ("最新有效运价选择展示", run_latest_rate_demo),
     "freight-rate": ("标准运价记录展示", run_freight_rate_demo),
     "route-request": ("订单输入与计费校验展示", run_route_request_demo),
     "node-registry": ("节点标准化能力展示", run_node_registry_demo),
@@ -36,9 +38,9 @@ def main() -> None:
     print("=" * 52)
     print("当前模块：")
     print_menu()
-    print("\n默认运行最新已完成模块展示：标准运价记录。")
+    print("\n默认运行最新已完成模块展示：最新有效运价选择。")
     print("=" * 52)
-    run_freight_rate_demo()
+    run_latest_rate_demo()
 
 
 def print_menu() -> None:

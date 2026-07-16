@@ -45,6 +45,9 @@ def main() -> None:
     print(f"两端节点齐全、可进入后续图构建: {len(result.graph_ready_candidates)} 条")
     print(f"仍缺少节点匹配的候选记录: {result.missing_node_candidate_count} 条")
     print(f"需人工确认的计费记录: {len(result.manual_review_items)} 条")
+    print(f"已排除的历史旧运价: {result.superseded_rate_count} 条")
+    print(f"已识别的同内容重复运价: {result.duplicate_rate_count} 条")
+    print(f"使用系统基准日期参与排序: {result.defaulted_maintenance_date_count} 条")
     print(f"因包装方式不匹配跳过: {result.skipped_packaging} 条")
     print(f"因适用品种不匹配跳过: {result.skipped_product} 条")
 

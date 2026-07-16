@@ -54,8 +54,8 @@ Leader-facing plans should not present unbuilt modules as complete or production
 | 2 | Node registry | Complete | Standard node ids, alias handling, coordinate conflict reporting, and coverage checks implemented |
 | 3 | Coordinate and map provider | Complete second version | Local standard node registry resolves known coordinates; Tencent coordinate and driving-route providers exist behind explicit interfaces and read API key from environment only |
 | 4 | Route request and unit validation | Complete | Order units and price units match exactly; mismatches return manual review |
-| 5 | FreightRate and cost rules | Partially complete | Formal `FreightRate`, `CostRuleEngine`, and corrected truck-rule boundary exist; latest-rate selection still pending |
-| 6 | Latest freight-rate selection | Not started | Same business route selects latest maintained valid rate; conflicts and missing dates are explicit |
+| 5 | FreightRate and cost rules | Complete first version | Formal `FreightRate`, `CostRuleEngine`, corrected truck-rule boundary, and latest-rate entry boundary exist |
+| 6 | Latest freight-rate selection | Complete second version | Same business route selects the latest effective rate; missing dates use a traceable 1970 baseline and conflicts remain explicit |
 | 7 | ShippingTimeProvider | Not started | Manual provider enabled; JSON, database, and API providers reserved but disabled |
 | 8 | CustomerProfile and route filtering | Not started | Private-terminal and no-private-terminal route logic separated and tested |
 | 9 | TransportEdge | Not started | Standard edge contains node ids, cost, time, mode, packaging, source, and availability reason |
@@ -115,7 +115,7 @@ Verification:
 
 ### Task 1.5: Tencent Maps API Provider Spike
 
-Status: complete first version.
+Status: complete second version.
 
 Goal:
 
@@ -138,6 +138,8 @@ Verification:
 
 ### Task 2: Latest Freight-Rate Selection
 
+Status: complete first version.
+
 Goal:
 
 - choose the latest maintained freight rate for the same business route.
@@ -153,6 +155,14 @@ Verification:
 
 - tests cover old/new records, missing dates, same-day conflicts, and different route keys;
 - data audit remains full-history and is not filtered.
+
+Implemented behavior:
+
+- dated historical records are retained in the loaded bundle but only the latest unambiguous record enters candidate billing;
+- raw missing dates remain empty, while selection compares them using the baseline date `1970-01-01`;
+- any normally dated record therefore supersedes an otherwise equivalent undated historical record;
+- conflicting records on the latest date block automatic selection for that business route;
+- exact duplicate latest records are deduplicated deterministically for candidate generation.
 
 ### Task 3: ShippingTimeProvider
 

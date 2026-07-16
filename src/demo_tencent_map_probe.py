@@ -21,17 +21,17 @@ except ImportError:  # Support direct script execution: python src/demo_tencent_
 
 
 def main() -> None:
-    """Run a non-business Tencent Maps smoke test with public Beijing POIs."""
+    """Run a non-business Tencent Maps smoke test with public Guangzhou POIs."""
     try:
-        coordinate_provider = TencentMapCoordinateProvider.from_env(region="北京", page_size=5)
+        coordinate_provider = TencentMapCoordinateProvider.from_env(region="广州", page_size=5)
         route_provider = TencentMapDrivingRouteProvider.from_env()
     except TencentMapConfigError as exc:
         print(f"Tencent Map probe skipped: {exc}")
         print(f"Set {TENCENT_MAP_API_KEY_ENV} locally before running this probe.")
         return
 
-    origin = coordinate_provider.resolve("北京西站")
-    destination = coordinate_provider.resolve("北京南站")
+    origin = coordinate_provider.resolve("广州南站")
+    destination = coordinate_provider.resolve("广州东站")
 
     print("Tencent Map coordinate probe")
     print(f"- origin status: {origin.status}, source: {origin.source}, name: {origin.canonical_name}")

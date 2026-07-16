@@ -175,7 +175,13 @@ Otherwise stale freight rates may enter the graph and distort route cost.
 Implications:
 
 - Use `FreightRate.business_route_key` as the starting route identity.
-- Define handling for missing dates and same-day conflicts.
+- A missing raw maintenance date remains `None` for audit and source traceability.
+- Latest-rate comparison treats a missing date as the internal baseline `1970-01-01`; this baseline does not overwrite the source record.
+- A normally dated record therefore supersedes an undated historical record for the same business route.
+- If multiple records conflict on the same effective date, including multiple conflicting undated records sharing the 1970 baseline, the route requires manual review.
+- If the latest effective date contains different rate ids, the whole latest-date set requires manual review and that business route produces no automatic candidate.
+- Exact duplicates with the same rate id and latest date are reduced to one deterministic source record for candidate generation.
+- Older dated records are superseded for candidate generation but remain available in the loaded bundle.
 - Data audit should still preserve full raw history.
 
 ## D-011: Shipping Time Uses Provider Interface

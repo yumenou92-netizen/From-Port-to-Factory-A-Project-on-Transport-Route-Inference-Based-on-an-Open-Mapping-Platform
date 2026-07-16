@@ -18,13 +18,13 @@ local JSON data audit
 -> unit matching
 -> FreightRate model
 -> traceable CostRuleEngine
+-> latest maintained freight-rate selection
 ```
 
 The project has not yet completed:
 
 ```text
-latest freight-rate selection
--> shipping time provider
+shipping time provider
 -> customer profile
 -> formal TransportEdge
 -> MultiDiGraph
@@ -45,6 +45,7 @@ latest freight-rate selection
 | `src/route_request.py` | Order request model and billing validation | Complete first version |
 | `src/unit_conversion.py` | Exact quantity/price unit matching and total cost conversion | Complete |
 | `src/freight_rate.py` | Formal freight-rate model and evaluation entry point | Mostly complete |
+| `src/latest_rate_selector.py` | Latest effective rate selection, 1970 baseline handling, duplicate handling, and conflict review | Complete second version |
 | `src/cost_rules.py` | Central rule engine and traceable calculation result | Truck known-route/unknown-route boundary corrected |
 | `src/graph_builder.py` | Legacy `nx.DiGraph` builder | Needs replacement or upgrade |
 | `src/route_planner.py` | Legacy shortest-path baseline | Needs strategy and MultiDiGraph upgrade |
@@ -62,7 +63,7 @@ Current data can support:
 - node and coordinate lookup;
 - endpoint coverage checks;
 - unit validation and current-order segment cost calculation;
-- known-route freight-rate lookup after latest-rate selection is implemented.
+- latest valid maintained-rate lookup for known routes.
 
 Current data cannot alone support:
 
@@ -83,6 +84,11 @@ Current data cannot alone support:
 - Valid calculated cost is current-order segment total cost in yuan.
 - Manual review is returned for unit mismatch or invalid price states.
 - Known truck routes use maintained `FreightRate` records through `calculate_last_mile_truck(..., known_rate=...)`.
+- Candidate generation groups records by `FreightRate.business_route_key` and uses only the latest unambiguous maintained rate.
+- Raw missing maintenance dates remain `None`, but latest-rate comparison uses `1970-01-01` as a traceable baseline.
+- A normally dated record supersedes an undated historical record for the same business route.
+- Conflicting records on the same effective latest date remain blocked for manual review.
+- Exact duplicate latest records are reduced to one deterministic candidate record; full loaded history remains available for audit.
 - Unknown bulk truck-route rule is registered as revised `draft-2` parameters but remains disabled; missing known rate returns `manual_review`.
 - Unknown container truck-route rule remains disabled and pending business confirmation.
 - Coordinate confirmation is local-first: standard node registry and known coordinate table are checked before any Tencent Maps fallback.
@@ -93,12 +99,10 @@ Current data cannot alone support:
 
 ## Current Business Rules Pending
 
-- Latest maintained freight-rate selection.
 - Shipping time provider design.
 - Customer profile and private-terminal source.
 - Formal integration of road distance provider into unknown truck-route pricing.
 - Unknown container truck-route formula confirmation.
-- Live Tencent Maps smoke test result against the user's local key.
 - Whether and how to convert container cost to ton-based comparison.
 
 ## Current Test State
@@ -106,7 +110,7 @@ Current data cannot alone support:
 Last verified full test result:
 
 ```text
-125 passed
+137 passed
 ```
 
 The default Python installation may not have `pytest`; use the configured project/PyCharm virtual environment when needed.
@@ -121,8 +125,8 @@ The default Python installation may not have `pytest`; use the configured projec
 
 Immediate order:
 
-1. Implement latest freight-rate selection.
-2. Implement `ShippingTimeProvider` with manual provider first.
+1. Implement `ShippingTimeProvider` with manual provider first.
+2. Define customer profile and private-terminal route filtering.
 3. Move into `TransportEdge` only after cost and time inputs are stable.
 
 ## Source Of Truth

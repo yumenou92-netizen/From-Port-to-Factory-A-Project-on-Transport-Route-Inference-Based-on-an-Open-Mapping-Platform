@@ -114,6 +114,139 @@ def test_build_order_edge_candidates_uses_known_truck_policy_for_truck_rates(tmp
     assert "熟悉汽运路线使用维护运价" in result.candidates[0].calculation_detail
 
 
+def test_edge_candidates_use_latest_rate_but_bundle_keeps_full_history(tmp_path):
+    data_dir = write_real_data_fixture(tmp_path)
+    rows = base_rate_rows()
+    rows[0]["费用"] = 20
+    rows[0]["维护日期"] = "2026-04-15"
+    latest = dict(rows[0])
+    latest["费用"] = 22
+    latest["维护日期"] = "2026-05-01"
+    write_json_lines(data_dir / "运价表.json", [rows[0], latest])
+    bundle = load_real_data_bundle(data_dir)
+
+    result = build_order_edge_candidates(
+        bundle,
+        quantity=500,
+        quantity_unit="吨",
+        packaging="散粮",
+        product="玉米",
+    )
+
+    assert len(bundle.freight_rates) == 2
+    assert len(result.candidates) == 1
+    assert result.candidates[0].raw_price == Decimal("22")
+    assert result.candidates[0].total_cost == Decimal("11000")
+    assert result.superseded_rate_count == 1
+
+
+def test_same_day_rate_conflict_becomes_manual_review(tmp_path):
+    data_dir = write_real_data_fixture(tmp_path)
+    rows = base_rate_rows()
+    conflicting = dict(rows[0])
+    conflicting["费用"] = 21
+    write_json_lines(data_dir / "运价表.json", [rows[0], conflicting])
+    bundle = load_real_data_bundle(data_dir)
+
+    result = build_order_edge_candidates(
+        bundle,
+        quantity=500,
+        quantity_unit="吨",
+        packaging="散粮",
+        product="玉米",
+    )
+
+    assert result.candidates == []
+    assert len(result.manual_review_items) == 2
+    assert all(item.calculation_rule_id == "latest_maintained_freight_rate" for item in result.manual_review_items)
+    assert all("同一业务路线" in item.review_reason for item in result.manual_review_items)
+
+
+def test_dated_rate_supersedes_undated_baseline_before_billing(tmp_path):
+    data_dir = write_real_data_fixture(tmp_path)
+    rows = base_rate_rows()
+    undated = dict(rows[0])
+    undated["费用"] = 99
+    undated.pop("维护日期")
+    write_json_lines(data_dir / "运价表.json", [rows[0], undated])
+    bundle = load_real_data_bundle(data_dir)
+
+    result = build_order_edge_candidates(
+        bundle,
+        quantity=500,
+        quantity_unit="吨",
+        packaging="散粮",
+        product="玉米",
+    )
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].raw_price == Decimal("20")
+    assert result.candidates[0].maintenance_date == "2026-04-15"
+    assert result.candidates[0].effective_maintenance_date == "2026-04-15"
+    assert not result.candidates[0].maintenance_date_defaulted
+    assert result.superseded_rate_count == 1
+    assert result.defaulted_maintenance_date_count == 1
+    assert result.manual_review_items == []
+
+
+def test_single_undated_rate_keeps_raw_null_and_exports_1970_baseline(tmp_path):
+    data_dir = write_real_data_fixture(tmp_path)
+    row = dict(base_rate_rows()[0])
+    row.pop("维护日期")
+    write_json_lines(data_dir / "运价表.json", [row])
+    bundle = load_real_data_bundle(data_dir)
+
+    result = build_order_edge_candidates(
+        bundle,
+        quantity=500,
+        quantity_unit="吨",
+        packaging="散粮",
+        product="玉米",
+    )
+
+    assert len(result.candidates) == 1
+    candidate = result.candidates[0]
+    assert candidate.maintenance_date is None
+    assert candidate.effective_maintenance_date == "1970-01-01"
+    assert candidate.maintenance_date_defaulted
+    assert result.defaulted_maintenance_date_count == 1
+    row = edge_candidate_to_row(candidate)
+    assert row["maintenance_date"] == ""
+    assert row["effective_maintenance_date"] == "1970-01-01"
+    assert row["maintenance_date_defaulted"] is True
+
+
+def test_conflicting_undated_rates_export_baseline_review_trace(tmp_path):
+    data_dir = write_real_data_fixture(tmp_path)
+    first = dict(base_rate_rows()[0])
+    first.pop("维护日期")
+    second = dict(first)
+    second["费用"] = 21
+    write_json_lines(data_dir / "运价表.json", [first, second])
+    bundle = load_real_data_bundle(data_dir)
+
+    result = build_order_edge_candidates(
+        bundle,
+        quantity=500,
+        quantity_unit="吨",
+        packaging="散粮",
+        product="玉米",
+    )
+
+    assert result.candidates == []
+    assert len(result.manual_review_items) == 2
+    assert all(item.maintenance_date is None for item in result.manual_review_items)
+    assert all(
+        item.effective_maintenance_date == "1970-01-01"
+        for item in result.manual_review_items
+    )
+    assert all(item.maintenance_date_defaulted for item in result.manual_review_items)
+    assert all(
+        "系统基准日期 1970-01-01" in item.review_reason
+        for item in result.manual_review_items
+    )
+
+
 def test_invalid_request_billing_stops_candidate_generation(tmp_path):
     bundle = load_real_data_bundle(write_real_data_fixture(tmp_path))
     request = RouteRequest(
@@ -291,6 +424,7 @@ def base_rate_rows():
             "费用": 500,
             "费用单位": "元/箱",
             "价格来源": "测试来源",
+            "维护日期": "2026-04-15",
         },
     ]
 

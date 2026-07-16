@@ -36,6 +36,7 @@ src/
   route_request.py       # order request model and packaging/unit validation
   unit_conversion.py     # exact unit matching and segment total cost conversion
   freight_rate.py        # formal FreightRate model and evaluation entry point
+  latest_rate_selector.py # latest maintained rate selection and conflict review
   cost_rules.py          # CostRuleEngine and traceable calculation results
   graph_builder.py       # legacy DiGraph builder, pending MultiDiGraph upgrade
   route_planner.py       # legacy shortest path baseline, pending strategy upgrade
@@ -181,6 +182,10 @@ Do not silently fill material business gaps with guesses.
 - Unit mismatch means `manual_review`, not automatic calculation.
 - Current real data covers South Port to customer/factory routes. North Port to South Port data is not yet provided.
 - Known truck routes should use maintained freight rates.
+- Same business route must pass latest-rate selection before candidate edge billing.
+- Missing maintenance dates remain `None` in raw records but use `1970-01-01` as the internal latest-rate comparison baseline.
+- Conflicting records on the same effective latest date require manual review.
+- Exact duplicate latest records may be deduplicated for candidate generation while raw history remains available for audit.
 - Unknown bulk truck-route rule is recorded as `draft-2` using the revised piecewise yuan-per-ton function, but remains disabled until distance provider, latest-rate selection, business acceptance, and boundary tests are complete.
 - Unknown container truck-route rule remains disabled and needs further business confirmation.
 - Shipping time currently comes from manual input only; JSON, database, and API providers are future placeholders.
