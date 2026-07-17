@@ -1,0 +1,8 @@
+key,value,required,note
+DATA_DIR,.\data_REAL,true,真实数据目录；真实路径只写入 local_env/runtime_env.csv。
+TENCENT_MAP_API_KEY,,false,腾讯地图 API Key；不要提交真实 Key。
+REAL_DATA_DEMO_MANUAL_TIME_HOURS,24,false,真实数据图搜索 smoke 的本地演示人工时间。
+REAL_DATA_DEMO_MANUAL_TIME_UNIT,小时,false,REAL_DATA_DEMO_MANUAL_TIME_HOURS 的时间单位。
+PYTHONPATH,.\.python_packages,false,当前 Windows 检出使用的本地依赖目录。
+SMOKE_RUN_REAL_DATA,true,false,DATA_DIR 存在时运行真实数据 smoke。
+SMOKE_RUN_TENCENT_PROBE,false,false,只有显式启用且存在 Key 时才调用腾讯地图公开点探针。

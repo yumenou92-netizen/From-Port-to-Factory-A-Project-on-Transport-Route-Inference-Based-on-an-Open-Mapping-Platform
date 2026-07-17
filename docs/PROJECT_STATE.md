@@ -255,6 +255,8 @@ $env:PYTHONIOENCODING="utf-8"
 - 只运行单元测试和非 API Demo 时不需要腾讯地图 Key。
 - 只运行领导默认 Demo 时不需要 `DATA_DIR`。
 - `demos/real_data_run.py` 和 `data/audit.py` 需要 `DATA_DIR`。
+- 开发者可把本地环境变量写入 `local_env/runtime_env.csv`；该目录被 Git 忽略，不上传 GitHub。
+- 模板为 `config/runtime_env.example.csv`。
 
 ### 7.2 当前验证解释器
 
@@ -290,8 +292,25 @@ python -m pytest -q
 本次实测结果：
 
 ```text
-217 passed in 1.00s
+240 passed in 0.87s
 ```
+
+开发者统一冒烟测试入口：
+
+```powershell
+python -B -m src.dev.smoke_test
+```
+
+该入口会：
+
+- 读取 `local_env/runtime_env.csv`，缺失时使用 `config/runtime_env.example.csv` 模板；
+- 自动补入本地 `.python_packages` 到 `PYTHONPATH`；
+- 使用 `local_env/.tmp/pytest` 作为 smoke 内部 pytest 临时目录；
+- 运行全量 pytest；
+- 当 `DATA_DIR` 存在且 `SMOKE_RUN_REAL_DATA=true` 时运行真实数据链 smoke；
+- 仅在显式设置 `SMOKE_RUN_TENCENT_PROBE=true` 或命令加 `--run-tencent` 时调用腾讯地图公开点探针。
+
+未完成项：项目级 `pytest.ini` 的 `--basetemp=.pytest_tmp` 配置今天先跳过；下班报告需标注该项未完成。当前 smoke 入口已在自身范围内规避 Windows 默认 pytest 临时目录权限问题。
 
 真实数据集成验证：
 
