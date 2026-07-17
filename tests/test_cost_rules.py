@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.cost_rules import (
+from src.domain.cost_rules import (
     BULK_SHIPPING_INDEX_RULE,
     DEFAULT_COST_RULE_ENGINE,
     FREIGHT_RATE_TOTAL_PRICE_RULE,
@@ -23,8 +23,8 @@ from src.cost_rules import (
     calculate_manual_shipping_cost,
     calculate_railway_cost,
 )
-from src.freight_rate import create_freight_rate
-from src.route_request import RouteRequest
+from src.domain.freight_rate import create_freight_rate
+from src.domain.route_request import RouteRequest
 
 
 def test_bulk_shipping_index():

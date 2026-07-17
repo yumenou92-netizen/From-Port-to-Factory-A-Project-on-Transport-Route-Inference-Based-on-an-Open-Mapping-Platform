@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.route_request import (
+from src.domain.route_request import (
     RouteRequest,
     RouteRequestError,
     evaluate_freight_charge,

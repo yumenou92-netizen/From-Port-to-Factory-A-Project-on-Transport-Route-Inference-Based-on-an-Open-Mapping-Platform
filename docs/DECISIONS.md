@@ -2,7 +2,7 @@
 
 This document records durable business and technical decisions. Add new decisions when rules change.
 
-Updated: 2026-07-16
+Updated: 2026-07-17
 
 ## D-001: Prototype Scope
 
@@ -141,7 +141,7 @@ Cost rules need rule ids, versions, traces, and a single calculation result shap
 
 Implications:
 
-- New cost logic should be added to `cost_rules.py`.
+- New cost logic should be added to `domain/cost_rules.py`.
 - `FreightRate` should remain a data model, not a rule container.
 
 ## D-009: Unknown Truck Rules Are Disabled Until Confirmed
@@ -363,7 +363,7 @@ Implications:
 - A private-terminal customer must not be routed through a transfer terminal.
 - `CustomerProfile` must contain a traceable source for the private-terminal flag and terminal node.
 - Until that data source exists, the system must not guess the route branch.
-- `customer_profile.py` implements the branch as `private_terminal` or `transfer_terminal`; unknown, missing-source, or contradictory profile data returns `manual_review` with no executable branch.
+- `routing/customer_profile.py` implements the branch as `private_terminal` or `transfer_terminal`; unknown, missing-source, or contradictory profile data returns `manual_review` with no executable branch.
 
 ## D-020: Candidate Transfer Ports Use Distance Only For Pre-Filtering
 
@@ -399,17 +399,17 @@ The same origin and destination may have different transport modes, packaging, p
 
 Implications:
 
-- The current `graph_builder.py` and `route_planner.py` remain legacy baseline code and must not be treated as the formal implementation.
+- The old `graph_builder.py`, `route_planner.py`, and `models.py` files have been removed from `src`; do not revive them as a parallel route engine.
 - `TransportEdge` must exist before real candidates enter the formal graph.
 - Missing cost or time must block or flag an edge; it must not default to zero.
 - Route output must include node sequence, edge keys, segment cost, segment time, transport mode, price source, rule trace, total cost, and total time.
 - Cost and time searches remain independent under D-004.
-- The formal implementation is split across `transport_edge.py`, `transport_graph.py`, `route_search.py`, and `route_result.py`; legacy `graph_builder.py`, `route_planner.py`, and `models.py` remain compatibility-only.
-- `transport_graph.py` excludes unavailable, duplicate-ID, and unknown-node edges with traceable issue records.
+- The formal implementation is split across `routing/transport_edge.py`, `routing/transport_graph.py`, `routing/route_search.py`, and `routing/route_result.py`.
+- `routing/transport_graph.py` excludes unavailable, duplicate-ID, and unknown-node edges with traceable issue records.
 - Formal graph construction requires `NodeRegistry` by default; only sanitized demos and unit tests may explicitly opt into unregistered nodes.
 - Any graph-build exclusion blocks a resolved recommendation because the omitted edge may change reachability or optimality.
-- `route_search.py` treats missing/invalid weights and same-node requests as `manual_review` rather than using NetworkX defaults or assuming zero transport.
-- Search outcomes carry a deterministic objective-weight graph signature, and `route_result.py` requires a new search when graph state changes before verifying edge keys and segment totals.
+- `routing/route_search.py` treats missing/invalid weights and same-node requests as `manual_review` rather than using NetworkX defaults or assuming zero transport.
+- Search outcomes carry a deterministic objective-weight graph signature, and `routing/route_result.py` requires a new search when graph state changes before verifying edge keys and segment totals.
 
 ## D-022: Bulk Shipping Supports Index And Explicit Manual Quote Modes
 
@@ -430,3 +430,23 @@ Implications:
 - Manual unit price follows the same exact quantity-unit matching rules as other maintained rates.
 - Manual total price must use a total-amount yuan unit and is not multiplied by quantity again.
 - Shipping time remains a separate input under D-011 and is not derived from the cost mode.
+
+## D-023: Source Code Is Organized By Functional Package
+
+Date: 2026-07-17
+
+Decision:
+
+Project source code is organized under functional packages: `src/data`, `src/domain`, `src/geo`, `src/routing`, and `src/demos`.
+
+Reason:
+
+The earlier flat `src` layout mixed model code, provider code, route search, and demos. That made it easy to reuse obsolete prototype files or confuse demo entry points with core modules.
+
+Implications:
+
+- Core model code must live in `data`, `domain`, `geo`, or `routing` according to responsibility.
+- Demo and local development scripts must live under `src/demos`.
+- New imports should use package paths such as `src.domain.cost_rules` and `src.routing.route_search`.
+- Do not add new top-level `src/demo_*.py` files.
+- Do not reintroduce the removed CSV/DiGraph prototype chain.

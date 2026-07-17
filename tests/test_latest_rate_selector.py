@@ -1,7 +1,7 @@
-from src.freight_rate import create_freight_rate
+from src.domain.freight_rate import create_freight_rate
 from datetime import date
 
-from src.latest_rate_selector import (
+from src.domain.latest_rate_selector import (
     DEFAULT_MAINTENANCE_DATE,
     effective_maintained_at,
     select_latest_freight_rates,

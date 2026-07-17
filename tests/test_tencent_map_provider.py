@@ -4,8 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from src.distance_provider import DrivingProfile, GeoPoint, RoadRouteRequest
-from src.tencent_map_provider import (
+from src.geo.distance_provider import DrivingProfile, GeoPoint, RoadRouteRequest
+from src.geo.tencent_map_provider import (
     DRIVING_ROUTE_URL,
     PLACE_SEARCH_URL,
     TENCENT_MAP_API_KEY_ENV,

@@ -1,6 +1,6 @@
 # ARCHITECTURE.md
 
-Updated: 2026-07-16
+Updated: 2026-07-17
 
 This document describes the current architecture and the next real-data integration boundary of the route inference prototype.
 
@@ -8,35 +8,34 @@ This document describes the current architecture and the next real-data integrat
 
 ```mermaid
 flowchart TD
-    A["Local JSON data via DATA_DIR"] --> B["data_audit.py"]
-    A --> C["data_loaders.py"]
+    A["Local JSON data via DATA_DIR"] --> B["data/audit.py"]
+    A --> C["data/loaders.py"]
 
-    C --> D["node_registry.py"]
-    D --> D2["coordinate_provider.py"]
-    D2 --> D3["tencent_map_provider.py"]
-    C --> E["freight_rate.py"]
-    E --> E2["latest_rate_selector.py"]
+    C --> D["domain/node_registry.py"]
+    D --> D2["geo/coordinate_provider.py"]
+    D2 --> D3["geo/tencent_map_provider.py"]
+    C --> E["domain/freight_rate.py"]
+    E --> E2["domain/latest_rate_selector.py"]
 
-    F["route_request.py"] --> G["unit_conversion.py"]
-    G --> H["cost_rules.py"]
+    F["domain/route_request.py"] --> G["domain/unit_conversion.py"]
+    G --> H["domain/cost_rules.py"]
     E2 --> H
-    T["shipping_time_provider.py"]
-    P["customer_profile.py"]
+    T["routing/shipping_time_provider.py"]
+    P["routing/customer_profile.py"]
 
-    D2 --> I["EdgeCandidate in data_loaders.py"]
+    D2 --> I["EdgeCandidate in data/loaders.py"]
     H --> I
-    I --> O["demo_run.py local CSV output"]
+    I --> O["demos/real_data_run.py local CSV output"]
 
-    D --> U["transport_edge.py"]
+    D --> U["routing/transport_edge.py"]
     H --> U
     T --> U
     P --> U
-    U --> V["transport_graph.py MultiDiGraph"]
-    V --> W["route_search.py cost / time Dijkstra"]
-    W --> X["route_result.py segment explanations"]
+    U --> V["routing/transport_graph.py MultiDiGraph"]
+    V --> W["routing/route_search.py cost / time Dijkstra"]
+    W --> X["routing/route_result.py segment explanations"]
 
-    J["graph_builder.py legacy DiGraph"] --> K["route_planner.py legacy shortest path"]
-    M["demo_leader.py"] --> N["demo_leader_*.py"]
+    M["demos/leader.py"] --> N["demos/leader_*.py"]
     N --> U
     N --> V
     N --> W
@@ -49,33 +48,33 @@ The formal model/search chain is implemented and verified with sanitized demo ob
 
 ```mermaid
 flowchart TD
-    A["Business data<br/>freight rates / coordinates / future route tables"] --> B["data_loaders.py"]
-    A --> C["data_audit.py"]
+    A["Business data<br/>freight rates / coordinates / future route tables"] --> B["data/loaders.py"]
+    A --> C["data/audit.py"]
 
-    B --> D["node_registry.py<br/>standard node ids"]
-    D --> D2["coordinate_provider.py<br/>local-first coordinate confirmation"]
-    B --> E["freight_rate.py<br/>FreightRate"]
-    E --> E2["latest_rate_selector.py<br/>latest valid maintained rate"]
+    B --> D["domain/node_registry.py<br/>standard node ids"]
+    D --> D2["geo/coordinate_provider.py<br/>local-first coordinate confirmation"]
+    B --> E["domain/freight_rate.py<br/>FreightRate"]
+    E --> E2["domain/latest_rate_selector.py<br/>latest valid maintained rate"]
 
-    F["route_request.py<br/>RouteRequest"] --> G["unit_conversion.py"]
-    G --> H["cost_rules.py<br/>CostRuleEngine"]
+    F["domain/route_request.py<br/>RouteRequest"] --> G["domain/unit_conversion.py"]
+    G --> H["domain/cost_rules.py<br/>CostRuleEngine"]
     E2 --> H
 
-    I["shipping_time_provider.py<br/>manual provider ready"]
-    J["distance_provider.py<br/>road route interface"]
-    J2["tencent_map_provider.py<br/>driving route adapter"]
-    K["customer_profile.py<br/>confirmed customer source required"]
+    I["routing/shipping_time_provider.py<br/>manual provider ready"]
+    J["geo/distance_provider.py<br/>road route interface"]
+    J2["geo/tencent_map_provider.py<br/>driving route adapter"]
+    K["routing/customer_profile.py<br/>confirmed customer source required"]
 
-    D2 --> L["transport_edge.py<br/>available or explicit review"]
+    D2 --> L["routing/transport_edge.py<br/>available or explicit review"]
     H --> L
     I --> L
     J --> J2
     J --> L
     K --> L
 
-    L --> M["transport_graph.py<br/>MultiDiGraph"]
-    M --> N["route_search.py<br/>RouteSearchStrategy"]
-    N --> O["route_result.py<br/>RouteSegment / RouteResult"]
+    L --> M["routing/transport_graph.py<br/>MultiDiGraph"]
+    M --> N["routing/route_search.py<br/>RouteSearchStrategy"]
+    N --> O["routing/route_result.py<br/>RouteSegment / RouteResult"]
 ```
 
 ## Layer Responsibilities
@@ -84,8 +83,8 @@ flowchart TD
 
 Files:
 
-- `src/data_audit.py`
-- `src/data_loaders.py`
+- `src/data/audit.py`
+- `src/data/loaders.py`
 
 Responsibilities:
 
@@ -105,9 +104,9 @@ Rules:
 
 File:
 
-- `src/node_registry.py`
-- `src/coordinate_provider.py`
-- `src/tencent_map_provider.py`
+- `src/domain/node_registry.py`
+- `src/geo/coordinate_provider.py`
+- `src/geo/tencent_map_provider.py`
 
 Responsibilities:
 
@@ -129,8 +128,8 @@ Rule:
 
 Files:
 
-- `src/route_request.py`
-- `src/unit_conversion.py`
+- `src/domain/route_request.py`
+- `src/domain/unit_conversion.py`
 
 Responsibilities:
 
@@ -146,9 +145,9 @@ Rule:
 
 Files:
 
-- `src/freight_rate.py`
-- `src/latest_rate_selector.py`
-- `src/cost_rules.py`
+- `src/domain/freight_rate.py`
+- `src/domain/latest_rate_selector.py`
+- `src/domain/cost_rules.py`
 
 Responsibilities:
 
@@ -178,9 +177,9 @@ Current disabled rule groups:
 
 Current files:
 
-- `src/shipping_time_provider.py`
-- `src/distance_provider.py`
-- `src/tencent_map_provider.py`
+- `src/routing/shipping_time_provider.py`
+- `src/geo/distance_provider.py`
+- `src/geo/tencent_map_provider.py`
 
 Responsibilities:
 
@@ -190,11 +189,11 @@ Responsibilities:
 
 Current state:
 
-- `shipping_time_provider.py` defines shipping-time request/result structures, `ManualShippingTimeProvider`, and unconfigured JSON/database/API placeholders;
+- `routing/shipping_time_provider.py` defines shipping-time request/result structures, `ManualShippingTimeProvider`, and unconfigured JSON/database/API placeholders;
 - manual shipping time accepts positive values and normalizes hours, days, and minutes to internal hours;
 - missing, non-positive, non-numeric, unsupported-unit, or unconfigured-provider cases return `manual_review` without a usable time;
-- `distance_provider.py` defines road route request/result interfaces and internal conversion to kilometers/hours;
-- `tencent_map_provider.py` implements Tencent place search and normal driving-route adapters;
+- `geo/distance_provider.py` defines road route request/result interfaces and internal conversion to kilometers/hours;
+- `geo/tencent_map_provider.py` implements Tencent place search and normal driving-route adapters;
 - truck-route adapter exists as an optional future enhancement, not the current dependency;
 - `build_transport_edge()` combines resolved shipping time with freight-rate and cost results;
 - the real-data `EdgeCandidate` flow still does not supply shipping time to `TransportEdge`;
@@ -204,7 +203,7 @@ Current state:
 
 File:
 
-- `src/customer_profile.py`
+- `src/routing/customer_profile.py`
 
 Responsibilities:
 
@@ -222,16 +221,10 @@ Current boundary:
 
 Current files:
 
-- `src/transport_edge.py`
-- `src/transport_graph.py`
-- `src/route_search.py`
-- `src/route_result.py`
-
-Legacy compatibility files:
-
-- `src/graph_builder.py`
-- `src/route_planner.py`
-- `src/models.py`
+- `src/routing/transport_edge.py`
+- `src/routing/transport_graph.py`
+- `src/routing/route_search.py`
+- `src/routing/route_result.py`
 
 Responsibilities:
 
@@ -243,12 +236,12 @@ Responsibilities:
 Current state:
 
 - `TransportEdge` requires positive order-segment cost and time plus trace fields before an edge is `available`;
-- `transport_graph.py` requires a `NodeRegistry` by default, builds `nx.MultiDiGraph`, uses edge IDs as keys, and records exclusions on the graph;
+- `routing/transport_graph.py` requires a `NodeRegistry` by default, builds `nx.MultiDiGraph`, uses edge IDs as keys, and records exclusions on the graph;
 - sanitized demos and unit tests may bypass registry validation only through the explicit `allow_unregistered_nodes=True` flag;
 - any graph-build exclusion prevents a route from being reported as resolved because the omitted edge may change reachability or optimality;
-- `route_search.py` searches cost and time independently, returns the chosen edge key per segment, and binds each result to a deterministic objective-weight graph signature;
-- `route_result.py` rehydrates complete segments, rejects stale search results, verifies source fields, checks route totals against segment sums, and exports explicit rows for no-path/manual-review outcomes;
-- legacy `graph_builder.py`, `route_planner.py`, and `models.py` remain for baseline compatibility only and are not the formal business implementation;
+- `routing/route_search.py` searches cost and time independently, returns the chosen edge key per segment, and binds each result to a deterministic objective-weight graph signature;
+- `routing/route_result.py` rehydrates complete segments, rejects stale search results, verifies source fields, checks route totals against segment sums, and exports explicit rows for no-path/manual-review outcomes;
+- the old `graph_builder.py`, `route_planner.py`, `models.py`, and duplicate standalone cost-rule demo have been removed from `src`;
 - the formal chain is not yet populated from real `EdgeCandidate` records.
 
 ## Important Boundaries

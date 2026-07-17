@@ -3,8 +3,8 @@ from decimal import Decimal
 
 import pytest
 
-from src.freight_rate import FreightRateError, create_freight_rate
-from src.route_request import RouteRequest
+from src.domain.freight_rate import FreightRateError, create_freight_rate
+from src.domain.route_request import RouteRequest
 
 
 def make_request() -> RouteRequest:

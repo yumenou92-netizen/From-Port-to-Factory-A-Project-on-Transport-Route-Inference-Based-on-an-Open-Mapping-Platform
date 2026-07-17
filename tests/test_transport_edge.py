@@ -3,10 +3,10 @@ from decimal import Decimal
 
 import pytest
 
-from src.cost_rules import CostCalculationResult
-from src.freight_rate import create_freight_rate
-from src.shipping_time_provider import ShippingTimeResult
-from src.transport_edge import TransportEdgeError, build_transport_edge
+from src.domain.cost_rules import CostCalculationResult
+from src.domain.freight_rate import create_freight_rate
+from src.routing.shipping_time_provider import ShippingTimeResult
+from src.routing.transport_edge import TransportEdgeError, build_transport_edge
 
 
 def make_rate(**overrides):

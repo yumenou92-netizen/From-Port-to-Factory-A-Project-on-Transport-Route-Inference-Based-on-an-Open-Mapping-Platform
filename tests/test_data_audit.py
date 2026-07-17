@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from src.data_audit import (
+from src.data.audit import (
     DataAuditError,
     audit_json_file,
     load_json_records,
@@ -10,7 +10,7 @@ from src.data_audit import (
     validate_sensitive_output_path,
     write_markdown_report,
 )
-from src.data_audit import main as run_data_audit
+from src.data.audit import main as run_data_audit
 
 
 def test_load_json_lines_records(tmp_path):

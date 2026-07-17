@@ -3,7 +3,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.data_loaders import (
+from src.data.loaders import (
     DataLoadError,
     build_review_rows,
     build_order_edge_candidates,
@@ -13,7 +13,7 @@ from src.data_loaders import (
     load_real_data_bundle,
     make_node_id,
 )
-from src.route_request import RouteRequest
+from src.domain.route_request import RouteRequest
 
 
 def test_load_real_data_bundle_reads_required_business_json_files(tmp_path):

@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.unit_conversion import (
+from src.domain.unit_conversion import (
     InvalidPriceError,
     InvalidQuantityError,
     UnitMismatchError,

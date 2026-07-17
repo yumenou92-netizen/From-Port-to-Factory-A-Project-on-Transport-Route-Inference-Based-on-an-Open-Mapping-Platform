@@ -1,19 +1,19 @@
 from decimal import Decimal
 
-from src.cost_rules import CostCalculationResult
-from src.customer_profile import (
+from src.domain.cost_rules import CostCalculationResult
+from src.routing.customer_profile import (
     CustomerProfile,
     TransferPortCandidate,
     prefilter_transfer_ports,
     resolve_customer_route,
 )
-from src.freight_rate import create_freight_rate
-from src.node_registry import NodeRegistry, StandardNode
-from src.route_result import build_route_recommendations
-from src.route_search import search_cost_and_time_paths
-from src.shipping_time_provider import ShippingTimeResult
-from src.transport_edge import build_transport_edge
-from src.transport_graph import build_transport_multidigraph
+from src.domain.freight_rate import create_freight_rate
+from src.domain.node_registry import NodeRegistry, StandardNode
+from src.routing.route_result import build_route_recommendations
+from src.routing.route_search import search_cost_and_time_paths
+from src.routing.shipping_time_provider import ShippingTimeResult
+from src.routing.transport_edge import build_transport_edge
+from src.routing.transport_graph import build_transport_multidigraph
 
 
 def test_formal_customer_to_route_result_pipeline_preserves_traceable_branch():

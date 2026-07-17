@@ -3,9 +3,9 @@ from decimal import Decimal
 import networkx as nx
 import pytest
 
-from src.node_registry import NodeRegistry, StandardNode
-from src.transport_edge import TransportEdge
-from src.transport_graph import TransportGraphError, build_transport_multidigraph
+from src.domain.node_registry import NodeRegistry, StandardNode
+from src.routing.transport_edge import TransportEdge
+from src.routing.transport_graph import TransportGraphError, build_transport_multidigraph
 
 
 def make_edge(**overrides) -> TransportEdge:
@@ -141,7 +141,7 @@ def test_no_missing_cost_or_time_defaults_are_created():
     assert attributes["time_hours"] != 0
 
 
-def test_graph_builder_rejects_non_transport_edge_values():
+def test_transport_graph_rejects_non_transport_edge_values():
     with pytest.raises(TransportGraphError, match="TransportEdge"):
         build_transport_multidigraph(
             [{"from": "node-a", "to": "node-b"}],

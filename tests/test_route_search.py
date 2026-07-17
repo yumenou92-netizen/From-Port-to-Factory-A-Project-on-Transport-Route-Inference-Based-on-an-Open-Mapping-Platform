@@ -3,13 +3,13 @@ from decimal import Decimal
 import networkx as nx
 import pytest
 
-from src.route_search import (
+from src.routing.route_search import (
     NetworkXDijkstraRouteSearchStrategy,
     RouteSearchError,
     search_cost_and_time_paths,
 )
-from src.transport_edge import TransportEdge
-from src.transport_graph import build_transport_multidigraph
+from src.routing.transport_edge import TransportEdge
+from src.routing.transport_graph import build_transport_multidigraph
 
 
 def make_edge(edge_id: str, start: str, end: str, cost: str, time: str) -> TransportEdge:

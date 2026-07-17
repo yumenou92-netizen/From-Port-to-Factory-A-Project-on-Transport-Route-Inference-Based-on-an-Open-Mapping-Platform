@@ -1,6 +1,6 @@
 from decimal import Decimal
 
-from src.shipping_time_provider import (
+from src.routing.shipping_time_provider import (
     ApiShippingTimeProvider,
     DatabaseShippingTimeProvider,
     JsonShippingTimeProvider,

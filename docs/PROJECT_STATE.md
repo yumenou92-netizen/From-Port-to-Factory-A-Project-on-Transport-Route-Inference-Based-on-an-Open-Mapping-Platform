@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-Updated: 2026-07-16
+Updated: 2026-07-17
 
 本文件是新线程接手项目时的首要状态说明。内容已依据当前代码、Git 状态、全量测试和本地集成验证重新核对，不以聊天记录或领导汇报作为完成依据。
 
@@ -18,42 +18,42 @@ Updated: 2026-07-16
 
 ```mermaid
 flowchart TD
-    A["DATA_DIR 本地 JSON/JSONL"] --> B["data_audit.py 数据审计"]
-    A --> C["data_loaders.py 类型化加载"]
-    C --> D["node_registry.py 节点注册与覆盖检查"]
-    D --> E["coordinate_provider.py 本地优先坐标解析"]
-    E --> F["tencent_map_provider.py 外部坐标兜底"]
-    C --> G["freight_rate.py FreightRate"]
-    G --> H["latest_rate_selector.py 最新有效运价"]
-    I["route_request.py RouteRequest"] --> J["unit_conversion.py 单位精确匹配"]
-    H --> K["cost_rules.py CostRuleEngine"]
+    A["DATA_DIR 本地 JSON/JSONL"] --> B["data/audit.py 数据审计"]
+    A --> C["data/loaders.py 类型化加载"]
+    C --> D["domain/node_registry.py 节点注册与覆盖检查"]
+    D --> E["geo/coordinate_provider.py 本地优先坐标解析"]
+    E --> F["geo/tencent_map_provider.py 外部坐标兜底"]
+    C --> G["domain/freight_rate.py FreightRate"]
+    G --> H["domain/latest_rate_selector.py 最新有效运价"]
+    I["domain/route_request.py RouteRequest"] --> J["domain/unit_conversion.py 单位精确匹配"]
+    H --> K["domain/cost_rules.py CostRuleEngine"]
     J --> K
-    K --> L["data_loaders.py EdgeCandidate / ReviewItem"]
+    K --> L["data/loaders.py EdgeCandidate / ReviewItem"]
     E --> L
     L --> M["本地 CSV 输出与 Demo 验证"]
 ```
 
-`demo_run.py` 的真实数据链目前仍停在 `EdgeCandidate` 和本地 CSV 输出；该旧候选只有费用，没有接入运输时间、客户分支和正式 `TransportEdge`。正式模型链已经实现，但尚未与这条真实数据候选链连接。
+`demos/real_data_run.py` 的真实数据链目前仍停在 `EdgeCandidate` 和本地 CSV 输出；该旧候选只有费用，没有接入运输时间、客户分支和正式 `TransportEdge`。正式模型链已经实现，但尚未与这条真实数据候选链连接。
 
 ### 2.2 外部地图边界
 
-- `coordinate_provider.py` 负责本地坐标优先和外部 Provider 兜底。
-- `distance_provider.py` 定义道路路线请求、结果、公里与小时单位及禁用 Provider。
-- `tencent_map_provider.py` 实现腾讯地点搜索、普通驾车路线和可选货车路线适配器。
+- `geo/coordinate_provider.py` 负责本地坐标优先和外部 Provider 兜底。
+- `geo/distance_provider.py` 定义道路路线请求、结果、公里与小时单位及禁用 Provider。
+- `geo/tencent_map_provider.py` 实现腾讯地点搜索、普通驾车路线和可选货车路线适配器。
 - API Key 只从 `TENCENT_MAP_API_KEY` 读取。
 - 当前数据加载主流程只绑定本地节点表，不会自动调用腾讯地图并回写坐标。
 
-### 2.3 仍为旧原型的图搜索链条
+### 2.3 已剥离的旧原型图搜索链条
 
 ```text
 sample_data CSV
--> io_utils.py
+-> data/io_utils.py
 -> graph_builder.py: nx.DiGraph
 -> route_planner.py: nx.shortest_path
 -> models.py: legacy RouteResult
 ```
 
-这条链只用于早期基线参考，未接入当前真实数据候选，不是正式业务架构。它会覆盖同端点平行边，并把缺失费用或时间默认为 0，不满足当前约束。
+这条早期链路已从 `src/` 剥离，不再作为可导入代码保留。旧样例数据仍可作为历史材料存在，但真实业务主流程不得依赖该 CSV/DiGraph 链。
 
 ### 2.4 已实现的正式模型与搜索链条
 
@@ -61,10 +61,10 @@ sample_data CSV
 ShippingTimeProvider
 -> CustomerProfile 与路线分支
 -> TransportEdge
--> transport_graph.py: nx.MultiDiGraph
--> route_search.py: RouteSearchStrategy
+-> routing/transport_graph.py: nx.MultiDiGraph
+-> routing/route_search.py: RouteSearchStrategy
 -> 分别搜索 cost / time
--> route_result.py: RouteSegment / RouteResult 解释输出
+-> routing/route_result.py: RouteSegment / RouteResult 解释输出
 ```
 
 该链已通过虚构节点和脱敏字段完成单元与集成演示。只有 `available` 边可以进入正式图，平行边使用 `edge_id` 作为 key，搜索结果返回每段 edge key。真实客户画像、北港至南港数据和当前 `EdgeCandidate` 尚未接入。
@@ -141,35 +141,35 @@ ShippingTimeProvider
 
 - `TransportEdge` 统一节点、方式、包装、品种、订单段总费用、小时制时间、原始价格、维护日期、距离、来源、规则版本和计算过程。
 - 缺节点、费用、时间或追溯字段的候选保留为 `manual_review` 或 `not_applicable`，不会默认成 0。
-- `transport_graph.py` 默认要求 `NodeRegistry`，使用 `nx.MultiDiGraph` 和 edge ID key 保存平行边；脱敏演示/测试必须显式声明允许未注册节点。
+- `routing/transport_graph.py` 默认要求 `NodeRegistry`，使用 `nx.MultiDiGraph` 和 edge ID key 保存平行边；脱敏演示/测试必须显式声明允许未注册节点。
 - 不可用、重复 edge ID 或引用未注册节点的边不会进入图，并保留问题代码和原因；存在建图排除项时不得输出 `resolved` 推荐。
 
 ### 3.10 双目标搜索与解释结果
 
-- `route_search.py` 定义 `RouteSearchStrategy` 协议和 NetworkX Dijkstra 基线实现。
+- `routing/route_search.py` 定义 `RouteSearchStrategy` 协议和 NetworkX Dijkstra 基线实现。
 - 成本使用 `cost`、时效使用 `time_hours` 独立搜索，不生成综合权重。
 - 搜索结果返回节点序列和每段 `(from_node_id, to_node_id, edge_key)`。
 - 缺节点、同起终点、缺权重、非法权重和无路径均有显式状态。
 - 搜索结果绑定目标权重图签名；搜索后节点、边或目标权重变化时返回 `manual_review` 并要求重新搜索。
-- `route_result.py` 从图中还原完整分段，保存价格/时间来源、计费规则、计算过程、总费用和总时间。
+- `routing/route_result.py` 从图中还原完整分段，保存价格/时间来源、计费规则、计算过程、总费用和总时间。
 - 结果层重新核对 edge key 和追溯字段，并强制总费用、总时间等于分段求和；无路径和人工复核结果导出时保留状态行。
 
 ### 3.11 Demo
 
-- `demo_run.py`：读取真实本地数据、构建订单计费候选并输出本地候选与人工复核 CSV。
-- `demo_leader.py`：统一入口展示各模块，默认运行双目标路径搜索与解释结果。
-- `demo_leader_shipping_time.py`：展示人工运输时间来源、小时制换算、非法输入人工复核和未接入数据源占位。
-- `demo_leader_customer_profile.py`：展示客户分支互斥、候选港预筛和缺数据人工复核。
-- `demo_leader_transport_edge.py`：展示可用边和缺节点/缺时间候选。
-- `demo_leader_transport_graph.py`：展示 MultiDiGraph 平行边和排除问题清单。
-- `demo_leader_route_search.py`：展示成本最低与时效最优路径、edge key 和完整分段来源。
-- `demo_tencent_map_probe.py`：可选的公开地点 API 冒烟测试。
+- `demos/real_data_run.py`：读取真实本地数据、构建订单计费候选并输出本地候选与人工复核 CSV。
+- `demos/leader.py`：统一入口展示各模块，默认运行双目标路径搜索与解释结果。
+- `demos/leader_shipping_time.py`：展示人工运输时间来源、小时制换算、非法输入人工复核和未接入数据源占位。
+- `demos/leader_customer_profile.py`：展示客户分支互斥、候选港预筛和缺数据人工复核。
+- `demos/leader_transport_edge.py`：展示可用边和缺节点/缺时间候选。
+- `demos/leader_transport_graph.py`：展示 MultiDiGraph 平行边和排除问题清单。
+- `demos/leader_route_search.py`：展示成本最低与时效最优路径、edge key 和完整分段来源。
+- `demos/tencent_map_probe.py`：可选的公开地点 API 冒烟测试。
 
 ## 4. 当前正在处理的问题
 
 1. **真实数据正式链集成**：阶段 9-13 第一版及审查加固已完成；真实 `EdgeCandidate` 仍未转换为 `TransportEdge` 并进入正式图。
-2. **Git 分支分叉**：本地 `main` 有 1 个未推送功能提交，远程 `origin/main` 有 2 个 README 提交，本地状态为 `ahead 1, behind 2`。
-3. **真实业务链尚未接通**：`demo_run.py` 仍输出旧 `EdgeCandidate`；客户画像、运输时间和正式 `TransportEdge` 尚未从真实数据生成。
+2. **Git 分支分叉**：本地 `main` 有 2 个未推送功能提交，远程 `origin/main` 有 2 个 README 提交，本地状态为 `ahead 2, behind 2`。
+3. **真实业务链尚未接通**：`demos/real_data_run.py` 仍输出旧 `EdgeCandidate`；客户画像、运输时间和正式 `TransportEdge` 尚未从真实数据生成。
 4. **节点覆盖不足**：真实数据验证中仍有运价端点无法映射到标准节点，不能进入后续正式图。
 
 ## 5. 已知缺陷与技术债
@@ -178,7 +178,7 @@ ShippingTimeProvider
 
 - `CustomerProfile` 模型和分支规则已实现，但正式客户数据源尚未提供。
 - 北港至南港散船费用和完整运输时间尚未提供，无法形成全链真实边。
-- `data_loaders.py` 的真实 `EdgeCandidate` 尚未改为组合费用、时间和客户规则的 `TransportEdge`。
+- `data/loaders.py` 的真实 `EdgeCandidate` 尚未改为组合费用、时间和客户规则的 `TransportEdge`。
 - 真实运价候选仍有端点缺少标准节点 ID，不能加入正式图。
 - 其他费用是否计入运输段、计入哪一段尚未确认。
 
@@ -190,12 +190,11 @@ ShippingTimeProvider
 - 腾讯地图新坐标和路线没有本地缓存、人工确认和正式表回写机制。
 - 当前主流程不会对未匹配节点自动调用腾讯坐标 Provider。
 
-### 5.3 旧原型缺陷
+### 5.3 已剥离旧原型的注意事项
 
-- `graph_builder.py` 使用 `nx.DiGraph`，同一端点的多条运输边会互相覆盖。
-- 旧建图代码对缺失 `base_cost`、`base_time`、`distance` 使用 0 默认值，与现行规则冲突。
-- `route_planner.py` 直接调用 `nx.shortest_path`，没有策略接口、edge key、不可达异常说明或人工复核信息。
-- `models.py` 中的旧 `Node`、`Customer`、`RouteSegment`、`RouteResult` 仅供早期兼容；正式结果已迁移到 `customer_profile.py`、`transport_edge.py` 和 `route_result.py`。
+- `graph_builder.py`、`route_planner.py` 和 `models.py` 已从 `src/` 删除。
+- 不再保留旧 `nx.DiGraph` 和 `nx.shortest_path` 兼容入口。
+- 新增业务代码必须接入 `src/routing/transport_graph.py`、`src/routing/route_search.py` 和 `src/routing/route_result.py`。
 - `README.md` 仍以 CSV/DiGraph 早期设计为主，与当前 JSON/FreightRate/Provider 架构存在文档漂移；远程另有两次 README 修改尚未合并。
 
 ### 5.4 环境问题
@@ -212,35 +211,32 @@ ShippingTimeProvider
 | `PLAN.md` | 真实里程碑和下一阶段验收标准 | 本次已更新 |
 | `docs/PROJECT_STATE.md` | 当前交接状态 | 本文件 |
 | `docs/DECISIONS.md` | 已确认业务与技术决策 | 本次更新 |
-| `docs/ARCHITECTURE.md` | 当前正式链、旧兼容链和下一真实数据接入边界 | 已同步至阶段 13 |
+| `docs/ARCHITECTURE.md` | 当前功能包结构、正式链和下一真实数据接入边界 | 已同步至阶段 13 与代码重组 |
 | `CHANGELOG.md` | 实际工程变更历史 | 已记录至阶段 13 第一版 |
-| `src/data_audit.py` | 数据质量审计与脱敏输出 | 已完成第一版 |
-| `src/data_loaders.py` | 真实 JSON 加载和计费候选构建 | 已完成第一版，仍缺时间与其他费用集成 |
-| `src/node_registry.py` | 标准节点、别名、坐标冲突和覆盖检查 | 已完成第一版 |
-| `src/coordinate_provider.py` | 本地优先坐标解析接口 | 已完成基础版 |
-| `src/distance_provider.py` | 道路路线请求/结果和禁用 Provider | 已完成基础版 |
-| `src/tencent_map_provider.py` | 腾讯地点与道路路线适配器 | 已完成基础版 |
-| `src/shipping_time_provider.py` | 运输时间请求/结果、人工 Provider 和未配置占位 Provider | 已完成第一版 |
-| `src/customer_profile.py` | 客户画像、互斥路线分支、包装/品种过滤和候选港预筛 | 已完成第一版；正式数据源待接入 |
-| `src/route_request.py` | 订单结构和包装/单位辅助校验 | 已完成第一版 |
-| `src/unit_conversion.py` | 单位精确匹配和总费用换算 | 已完成 |
-| `src/freight_rate.py` | 正式运价模型 | 已完成第一版 |
-| `src/latest_rate_selector.py` | 最新有效运价、冲突和重复处理 | 已完成第一版 |
-| `src/cost_rules.py` | 统一费用规则引擎和追溯结果 | 已完成第一版；陌生汽运仍禁用 |
-| `src/transport_edge.py` | 正式运输边、可用状态、来源和规则追溯 | 已完成第一版 |
-| `src/transport_graph.py` | 正式 MultiDiGraph 构建、平行边和排除问题清单 | 已完成第一版 |
-| `src/route_search.py` | cost/time 独立 Dijkstra 策略和 edge key 结果 | 已完成第一版 |
-| `src/route_result.py` | 分段解释、汇总校验和行式导出 | 已完成第一版 |
-| `src/demo_run.py` | 真实数据开发集成脚本 | 可运行 |
-| `src/demo_leader.py` | 领导展示入口 | 可运行，默认展示双目标路径搜索与解释结果 |
-| `src/demo_leader_shipping_time.py` | 运输时间 Provider 展示 | 可运行 |
-| `src/demo_leader_customer_profile.py` | 客户画像与路线分支展示 | 可运行 |
-| `src/demo_leader_transport_edge.py` | 标准运输边展示 | 可运行 |
-| `src/demo_leader_transport_graph.py` | MultiDiGraph 展示 | 可运行 |
-| `src/demo_leader_route_search.py` | 双目标搜索与解释结果展示 | 可运行 |
-| `src/models.py` | 旧通用模型 | 仅保留兼容，不作为正式结果模型 |
-| `src/graph_builder.py` | 旧 `DiGraph` 建图 | 不得作为正式业务图直接复用 |
-| `src/route_planner.py` | 旧最短路径基线 | 仅保留兼容；正式策略在 `route_search.py` |
+| `src/data/audit.py` | 数据质量审计与脱敏输出 | 已完成第一版 |
+| `src/data/loaders.py` | 真实 JSON 加载和计费候选构建 | 已完成第一版，仍缺时间与其他费用集成 |
+| `src/domain/node_registry.py` | 标准节点、别名、坐标冲突和覆盖检查 | 已完成第一版 |
+| `src/geo/coordinate_provider.py` | 本地优先坐标解析接口 | 已完成基础版 |
+| `src/geo/distance_provider.py` | 道路路线请求/结果和禁用 Provider | 已完成基础版 |
+| `src/geo/tencent_map_provider.py` | 腾讯地点与道路路线适配器 | 已完成基础版 |
+| `src/routing/shipping_time_provider.py` | 运输时间请求/结果、人工 Provider 和未配置占位 Provider | 已完成第一版 |
+| `src/routing/customer_profile.py` | 客户画像、互斥路线分支、包装/品种过滤和候选港预筛 | 已完成第一版；正式数据源待接入 |
+| `src/domain/route_request.py` | 订单结构和包装/单位辅助校验 | 已完成第一版 |
+| `src/domain/unit_conversion.py` | 单位精确匹配和总费用换算 | 已完成 |
+| `src/domain/freight_rate.py` | 正式运价模型 | 已完成第一版 |
+| `src/domain/latest_rate_selector.py` | 最新有效运价、冲突和重复处理 | 已完成第一版 |
+| `src/domain/cost_rules.py` | 统一费用规则引擎和追溯结果 | 已完成第一版；陌生汽运仍禁用 |
+| `src/routing/transport_edge.py` | 正式运输边、可用状态、来源和规则追溯 | 已完成第一版 |
+| `src/routing/transport_graph.py` | 正式 MultiDiGraph 构建、平行边和排除问题清单 | 已完成第一版 |
+| `src/routing/route_search.py` | cost/time 独立 Dijkstra 策略和 edge key 结果 | 已完成第一版 |
+| `src/routing/route_result.py` | 分段解释、汇总校验和行式导出 | 已完成第一版 |
+| `src/demos/real_data_run.py` | 真实数据开发集成脚本 | 可运行 |
+| `src/demos/leader.py` | 领导展示入口 | 可运行，默认展示双目标路径搜索与解释结果 |
+| `src/demos/leader_shipping_time.py` | 运输时间 Provider 展示 | 可运行 |
+| `src/demos/leader_customer_profile.py` | 客户画像与路线分支展示 | 可运行 |
+| `src/demos/leader_transport_edge.py` | 标准运输边展示 | 可运行 |
+| `src/demos/leader_transport_graph.py` | MultiDiGraph 展示 | 可运行 |
+| `src/demos/leader_route_search.py` | 双目标搜索与解释结果展示 | 可运行 |
 
 ## 7. 环境配置
 
@@ -254,7 +250,7 @@ $env:PYTHONIOENCODING="utf-8"
 
 - 只运行单元测试和非 API Demo 时不需要腾讯地图 Key。
 - 只运行领导默认 Demo 时不需要 `DATA_DIR`。
-- `demo_run.py` 和 `data_audit.py` 需要 `DATA_DIR`。
+- `demos/real_data_run.py` 和 `data/audit.py` 需要 `DATA_DIR`。
 
 ### 7.2 当前验证解释器
 
@@ -290,26 +286,26 @@ python -m pytest -q
 本次实测结果：
 
 ```text
-213 passed in 1.20s
+213 passed in 1.05s
 ```
 
 真实数据集成验证：
 
 ```powershell
 $env:DATA_DIR=(Resolve-Path ".\data_REAL").Path
-python "src\demo_run.py"
+python -m src.demos.real_data_run
 ```
 
 领导 Demo：
 
 ```powershell
-python "src\demo_leader.py"
-python "src\demo_leader.py" latest-rate
-python "src\demo_leader.py" shipping-time
-python "src\demo_leader.py" customer-profile
-python "src\demo_leader.py" transport-edge
-python "src\demo_leader.py" transport-graph
-python "src\demo_leader.py" route-search
+python -m src.demos.leader
+python -m src.demos.leader latest-rate
+python -m src.demos.leader shipping-time
+python -m src.demos.leader customer-profile
+python -m src.demos.leader transport-edge
+python -m src.demos.leader transport-graph
+python -m src.demos.leader route-search
 ```
 
 数据审计：
@@ -323,7 +319,7 @@ python -m src.data_audit
 
 ```powershell
 $env:TENCENT_MAP_API_KEY="<local-only>"
-python "src\demo_tencent_map_probe.py"
+python -m src.demos.tencent_map_probe
 ```
 
 本次交接没有重新调用真实腾讯 API；相关单元测试使用模拟响应并通过。
@@ -355,39 +351,36 @@ python "src\demo_tencent_map_probe.py"
 
 ## 10. 最近修改内容
 
-### 当前未提交功能修改
+### 当前未提交结构调整
 
 主要内容：
 
-- 新增 `shipping_time_provider.py`，完成人工时间输入、单位换算和未配置 Provider 占位；
-- 新增 `customer_profile.py`，完成客户自有码头互斥分支、兼容性过滤和候选港预筛；
-- 新增 `transport_edge.py`，完成费用、时间、节点和追溯字段的严格运输边模型；
-- 新增 `transport_graph.py`，使用 MultiDiGraph 和 edge ID key 保留平行边；
-- 新增 `route_search.py`，分别搜索成本最低和时效最优路径并返回 edge key；
-- 新增 `route_result.py`，还原完整分段、校验汇总并提供行式导出；
-- 新增阶段 8-13 对应测试和领导演示，总 Demo 默认运行 `route-search`；
-- 同步 `PLAN.md`、`docs/PROJECT_STATE.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md` 和 `CHANGELOG.md`。
+- 将主代码按功能包整理为 `src/data`、`src/domain`、`src/geo`、`src/routing` 和 `src/demos`；
+- 将领导展示、本地真实数据联调和公开 API 探针统一迁入 `src/demos`，调用方式改为 `python -m src.demos.leader ...`；
+- 从 `src` 剥离旧 CSV/DiGraph 原型文件 `models.py`、`graph_builder.py`、`route_planner.py`；
+- 删除与统一领导 Demo 重复的独立 `demo_cost_rules.py`；
+- 同步更新测试导入、Demo 导入、长期架构文档、决策记录和变更日志；
+- 已完成代码绝对路径扫描，`src` 和 `tests` 未发现硬编码本机项目路径。
 
 ### 本地最新提交
+
+```text
+f4814bc feat(routing): add formal route recommendation pipeline
+```
+
+主要内容：
+
+- 新增正式路线推荐链路：运输时间、客户分支、标准运输边、MultiDiGraph 建图、cost/time 独立搜索和解释结果；
+- 阶段 8-13 对应测试和领导演示已提交；
+- 本地分支因此相对远程为 `ahead 2, behind 2`。
+
+### 上一个本地功能提交
 
 ```text
 b17b350 feat(rates): select latest effective freight rates
 ```
 
-主要内容：
-
-- 新增 `src/latest_rate_selector.py`；
-- 最新运价选择接入 `data_loaders.py`；
-- 增加 1970 比较基线、同日冲突和重复记录测试；
-- 更新领导 Demo 和项目状态文档。
-
-### 上一个已同步功能提交
-
-```text
-9ec4ada feat(routing): add map provider foundation
-```
-
-主要内容是腾讯地图地点搜索、普通驾车路线、可选货车路线及其测试。
+主要内容是最新有效运价选择、1970 比较基线、同日冲突、重复记录处理及对应测试。
 
 ### 远程独有提交
 
@@ -400,9 +393,9 @@ b17b350 feat(rates): select latest effective freight rates
 
 ## 11. 本次提交范围与本地材料
 
-### 11.1 本次阶段 8-13 提交范围
+### 11.1 当前结构整理工作区改动
 
-以下文件属于本次交接和阶段 8-13 开发的提交范围：
+以下改动属于 2026-07-17 结构整理范围，提交前需作为同一组审阅：
 
 - `AGENTS.md`
 - `PLAN.md`
@@ -410,31 +403,18 @@ b17b350 feat(rates): select latest effective freight rates
 - `docs/ARCHITECTURE.md`
 - `docs/PROJECT_STATE.md`
 - `docs/DECISIONS.md`
-- `docs/project_timetable.md`：增加历史快照说明，避免旧 Todo 被误读为当前进度。
-- `src/demo_leader.py`
-- `src/demo_leader_shipping_time.py`
-- `src/shipping_time_provider.py`
-- `tests/test_shipping_time_provider.py`
-- `src/demo_leader_customer_profile.py`
-- `src/customer_profile.py`
-- `tests/test_customer_profile.py`
-- `src/demo_leader_transport_edge.py`
-- `src/transport_edge.py`
-- `tests/test_transport_edge.py`
-- `src/demo_leader_transport_graph.py`
-- `src/transport_graph.py`
-- `tests/test_transport_graph.py`
-- `src/demo_leader_route_search.py`
-- `src/route_search.py`
-- `src/route_result.py`
-- `tests/test_route_search.py`
-- `tests/test_route_result.py`
+- `src/data/*`：数据审计、加载和 IO 工具；
+- `src/domain/*`：运价、规则、订单、节点和单位等业务领域对象；
+- `src/geo/*`：坐标、距离和腾讯地图 Provider；
+- `src/routing/*`：客户分支、运输时间、运输边、建图、搜索和结果解释；
+- `src/demos/*`：领导展示、本地真实数据联调和公开 API 探针；
+- `tests/*`：导入路径同步到新的功能包结构。
 
-本轮自动开发开始时，阶段 8 和交接文档已在工作区但尚未暂存；本轮继续在这些改动上完成阶段 9-13。
+旧文件 `src/models.py`、`src/graph_builder.py`、`src/route_planner.py` 和重复的 `src/demo_cost_rules.py` 已删除，不应在后续提交中恢复。
 
-### 11.2 保留在工作区的独立改动
+### 11.2 保留并迁移的公开探针改动
 
-- `src/demo_tencent_map_probe.py`：在本次交接检查期间出现的独立修改，将公开测试地点从广州站点改为全国范围的“福田站”和“故宫博物院”；不含 API Key 或真实业务地点，本轮不纳入阶段 8-13 提交范围，后续提交前需单独确认是否一并保留。
+- `src/demos/tencent_map_probe.py`：保留此前用户侧公开测试地点修改，将测试地点设为全国范围的“福田站”和“故宫博物院”；不含 API Key 或真实业务地点，已随 Demo 目录迁移一并保留。
 
 ### 11.3 未跟踪本地材料
 
@@ -460,21 +440,20 @@ b17b350 feat(rates): select latest effective freight rates
 ### 11.5 当前分支关系
 
 ```text
-main...origin/main [ahead 1, behind 2]
+main...origin/main [ahead 2, behind 2]
 ```
 
 安全同步建议：先审阅本次文档修改并提交，再使用 rebase 整合远程 README 提交；全过程不得使用强制推送。
 
 ## 12. 下一步建议
 
-1. 新线程先运行 `git status --short --branch` 和全量测试，确认交接后状态未变化。
-2. 审阅本次四份交接文档及 `src/demo_tencent_map_probe.py` 的 diff 和敏感信息。
-3. 决定是否把交接文档与 `2026-07-16_DEVELOPMENT_LOG.md` 作为独立文档提交；不要加入 Office、PDF、图片和真实数据。
-4. 处理本地与远程分叉：在敏感检查和文档提交策略明确后执行 `git rebase origin/main`，解决后再推送。
-5. 取得并确认客户自有码头标志、码头节点、允许包装/品种的正式数据源；在此之前继续使用 `manual_review`，不得猜测。
-6. 确认北港至南港散船费用和时间来源，或明确第一批真实搜索只覆盖南港至客户工厂。
-7. 将 `demo_run.py` 的 `EdgeCandidate` 组合流程迁移到 `TransportEdge`，再调用 `transport_graph.py`、`route_search.py` 和 `route_result.py`。
-8. 接入真实候选前处理缺节点 ID，并确认 `AdditionalFee` 应计入哪一个运输段。
+1. 审阅当前结构整理 diff，确认删除旧原型文件和迁移 Demo 文件符合预期。
+2. 在结构整理通过敏感信息检查后提交；不要加入 Office、PDF、图片、真实数据或 `output/`。
+3. 处理本地与远程分叉：在结构整理提交后执行 `git rebase origin/main`，整合远程 README 提交；全过程不得使用强制推送。
+4. 取得并确认客户自有码头标志、码头节点、允许包装/品种的正式数据源；在此之前继续使用 `manual_review`，不得猜测。
+5. 确认北港至南港散船费用和时间来源，或明确第一批真实搜索只覆盖南港至客户工厂。
+6. 将 `src/demos/real_data_run.py` 的 `EdgeCandidate` 组合流程迁移到 `TransportEdge`，再调用 `routing/transport_graph.py`、`routing/route_search.py` 和 `routing/route_result.py`。
+7. 接入真实候选前处理缺节点 ID，并确认 `AdditionalFee` 应计入哪一个运输段。
 
 ## 13. 明确禁止重新实施或推翻的已确认事项
 

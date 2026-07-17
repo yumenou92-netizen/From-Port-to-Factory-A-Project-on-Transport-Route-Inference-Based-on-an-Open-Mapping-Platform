@@ -1,8 +1,8 @@
 from decimal import Decimal
 
-from src.data_loaders import NodeRecord, make_node_id
-from src.freight_rate import FreightRate, create_freight_rate
-from src.node_registry import (
+from src.data.loaders import NodeRecord, make_node_id
+from src.domain.freight_rate import FreightRate, create_freight_rate
+from src.domain.node_registry import (
     AliasRule,
     analyze_freight_rate_node_coverage,
     build_node_registry,

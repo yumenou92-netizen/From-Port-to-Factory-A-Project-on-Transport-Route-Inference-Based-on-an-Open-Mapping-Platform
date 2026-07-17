@@ -2,7 +2,7 @@ from decimal import Decimal
 
 import pytest
 
-from src.customer_profile import (
+from src.routing.customer_profile import (
     CustomerProfile,
     CustomerProfileError,
     CustomerRouteDecision,

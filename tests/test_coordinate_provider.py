@@ -1,10 +1,10 @@
-from src.coordinate_provider import (
+from src.geo.coordinate_provider import (
     CoordinateProviderError,
     DisabledTencentMapCoordinateProvider,
     LocalFirstCoordinateProvider,
 )
-from src.data_loaders import NodeRecord, make_node_id
-from src.node_registry import build_node_registry
+from src.data.loaders import NodeRecord, make_node_id
+from src.domain.node_registry import build_node_registry
 
 
 def test_local_first_coordinate_provider_resolves_known_node():

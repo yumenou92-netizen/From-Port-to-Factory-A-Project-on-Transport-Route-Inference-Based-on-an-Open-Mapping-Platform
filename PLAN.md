@@ -1,6 +1,6 @@
 # PLAN.md
 
-Updated: 2026-07-16
+Updated: 2026-07-17
 
 本文件记录真实工程里程碑。较早的日计划、领导汇报和 7 月 9 日 SOP 仅作为历史材料；与当前代码或本计划冲突时，以代码、测试、`docs/DECISIONS.md` 和本文件为准。
 
@@ -38,13 +38,14 @@ Updated: 2026-07-16
 | 8 | ShippingTimeProvider | 已完成（第一版） | 已定义统一请求/结果结构；`ManualShippingTimeProvider` 支持小时、天、分钟换算；缺失、零值、负数、非数值和未配置 Provider 均不会生成可用时间 |
 | 9 | CustomerProfile 与路线分支 | 已完成（第一版） | 已定义可追溯客户画像、未知/矛盾状态、两类互斥路线、包装/品种过滤和候选港前 K 距离预筛 |
 | 10 | TransportEdge | 已完成（第一版） | 已统一节点、订单段总费用、小时制时间、原始价格、来源、规则版本、计算过程和可用状态；缺字段不产生可搜索边 |
-| 11 | `nx.MultiDiGraph` 正式图 | 已完成（第一版） | `transport_graph.py` 使用 edge ID 作为 key 保留平行边，排除不可用、重复和未知节点边，不使用 0 默认值 |
+| 11 | `nx.MultiDiGraph` 正式图 | 已完成（第一版） | `routing/transport_graph.py` 使用 edge ID 作为 key 保留平行边，排除不可用、重复和未知节点边，不使用 0 默认值 |
 | 12 | RouteSearchStrategy | 已完成（第一版） | NetworkX Dijkstra 分别搜索成本最低和时效最优路径，显式返回节点和每段 edge key |
 | 13 | RouteResult 与解释输出 | 已完成（第一版） | 已输出分段费用、时间、方式、来源、规则、计算过程、总费用、总时间及人工复核/无路径状态 |
+| 14 | 代码结构整理与旧原型剥离 | 已完成（第一版） | `src` 已按 `data/domain/geo/routing/demos` 分包；旧 CSV/DiGraph 原型代码和重复 demo 已剥离；演示入口改为 `python -m src.demos.leader` |
 
 ## 当前阶段
 
-当前位于阶段 13 第一版完成、真实业务候选尚未接入正式图的确认点。
+当前位于阶段 14 第一版完成、真实业务候选尚未接入正式图的确认点。
 
 模型和算法基线已经贯通：
 
@@ -60,7 +61,7 @@ CustomerProfile
 
 1. 确认客户自有码头字段、码头节点和允许包装/品种的正式数据源；
 2. 提供北港至南港散船费用与运输时间，或确认第一批只覆盖南港至客户工厂；
-3. 将 `demo_run.py` 当前 `EdgeCandidate` 流程改为生成 `TransportEdge`，再进入正式图搜索；
+3. 将 `demos/real_data_run.py` 当前 `EdgeCandidate` 流程改为生成 `TransportEdge`，再进入正式图搜索；
 4. 对接前先解决真实运价端点缺节点和其他费用是否计入运输段的问题。
 
 ## 已完成阶段：ShippingTimeProvider
@@ -71,10 +72,10 @@ CustomerProfile
 
 ### 计划文件
 
-- `src/shipping_time_provider.py`
+- `src/routing/shipping_time_provider.py`
 - `tests/test_shipping_time_provider.py`
-- `src/demo_leader_shipping_time.py`
-- `src/demo_leader.py`
+- `src/demos/leader_shipping_time.py`
+- `src/demos/leader.py`
 
 ### 接口要求
 
@@ -90,7 +91,7 @@ CustomerProfile
 
 - 正常人工输入、单位转换、缺失和非法输入均有测试；
 - 全量 pytest 通过；
-- `python src\demo_leader.py shipping-time` 能解释当前来源和未接入来源；
+- `python -m src.demos.leader shipping-time` 能解释当前来源和未接入来源；
 - 项目状态、架构、决策和变更记录已同步；
 - 敏感信息检查通过。
 
@@ -98,14 +99,14 @@ CustomerProfile
 
 ### CustomerProfile
 
-- `src/customer_profile.py` 定义客户 ID、工厂节点、自有码头标志、自有码头节点、允许包装/品种和来源；
+- `src/routing/customer_profile.py` 定义客户 ID、工厂节点、自有码头标志、自有码头节点、允许包装/品种和来源；
 - 未知标志、缺少来源、缺码头节点和字段矛盾均返回 `manual_review`；
 - 有自有码头客户不生成中转港路线，无自有码头客户不生成自有码头直达路线；
 - `prefilter_transfer_ports()` 只按确认距离筛前 K，结果明确要求继续比较总费用和总时间。
 
 ### TransportEdge
 
-`src/transport_edge.py` 已包含：
+`src/routing/transport_edge.py` 已包含：
 
 - `edge_id` / edge key；
 - `from_node_id`、`to_node_id`；
@@ -121,23 +122,32 @@ CustomerProfile
 
 ### MultiDiGraph 与搜索
 
-- `src/transport_graph.py` 使用 `nx.MultiDiGraph`，不复用旧 `DiGraph` 作为正式业务图；
+- `src/routing/transport_graph.py` 使用 `nx.MultiDiGraph`，不复用旧 `DiGraph` 作为正式业务图；
 - 正式建图默认必须提供 `NodeRegistry`；仅脱敏演示和单元测试可显式允许未注册节点；
 - 建图排除项会保留在图元数据中，并阻止输出错误的“已解决”推荐；
-- `src/route_search.py` 提供 `RouteSearchStrategy` 协议和 NetworkX Dijkstra 基线；
+- `src/routing/route_search.py` 提供 `RouteSearchStrategy` 协议和 NetworkX Dijkstra 基线；
 - 成本和时间分别搜索，不创建未经确认的综合权重；
 - 缺节点、缺权重、同起终点和无路径均有显式状态；
 - 搜索结果绑定目标权重图签名，搜索后图发生变化时必须重新搜索；
-- `src/route_result.py` 返回节点、edge key、完整分段信息和严格分段求和结果；
+- `src/routing/route_result.py` 返回节点、edge key、完整分段信息和严格分段求和结果；
 - 无路径和人工复核结果导出时保留一条状态行，不再从表格结果中消失；
-- `python src\demo_leader.py route-search` 可运行脱敏集成演示。
+- `python -m src.demos.leader route-search` 可运行脱敏集成演示。
 
 ### 验收结果
 
 - 阶段 9-13 新增 67 个 pytest 场景；
-- 全量测试：`213 passed in 1.20s`；
+- 全量测试：`213 passed in 1.05s`；
 - 领导演示：`customer-profile`、`transport-edge`、`transport-graph`、`route-search` 均可运行；
 - 真实业务数据尚未写入正式图，本次演示全部使用虚构节点和脱敏字段。
+
+## 已完成阶段：代码结构整理与旧原型剥离
+
+- `src/data`：真实数据加载、数据审计和本地输出工具；
+- `src/domain`：订单、单位、节点、运价、最新运价和费用规则；
+- `src/geo`：坐标、距离和腾讯地图 Provider；
+- `src/routing`：客户画像、运输时间、运输边、正式图、搜索和结果解释；
+- `src/demos`：领导展示、真实数据本地开发脚本和公开 API 探针；
+- 旧 `models.py`、`graph_builder.py`、`route_planner.py` 和重复的 `demo_cost_rules.py` 已从 `src` 剥离。
 
 ## 已知依赖与待确认项
 
