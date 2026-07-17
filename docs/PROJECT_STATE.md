@@ -292,7 +292,7 @@ python -m pytest -q
 本次实测结果：
 
 ```text
-240 passed in 0.87s
+241 passed in 0.71s
 ```
 
 开发者统一冒烟测试入口：

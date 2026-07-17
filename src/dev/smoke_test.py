@@ -198,7 +198,7 @@ def print_runtime_env(result: RuntimeEnvLoadResult) -> None:
         for entry in result.entries:
             print(
                 f"  - {entry.key}: status={entry.status}; required={entry.required}; "
-                f"value={entry.display_value}; note={entry.note}"
+                f"value={entry.display_value}; note={entry.display_note}"
             )
     if result.missing_required:
         print("Missing required entries:")

@@ -40,6 +40,14 @@ class RuntimeEnvEntry:
             return f"<set; {len(value)} chars>"
         return value
 
+    @property
+    def display_note(self) -> str:
+        if not self.note:
+            return ""
+        if is_secret_key(self.key):
+            return "<redacted for secret-like key>"
+        return redact_secret_like_text(self.note)
+
 
 @dataclass(frozen=True)
 class RuntimeEnvLoadResult:
@@ -166,23 +174,38 @@ def is_secret_key(key: str) -> bool:
     return any(marker in upper_key for marker in SECRET_MARKERS)
 
 
+def redact_secret_like_text(value: str) -> str:
+    redacted = value
+    for marker in SECRET_MARKERS:
+        redacted = _redact_assignment(redacted, marker)
+    return redacted
+
+
 def env_snapshot(keys: tuple[str, ...]) -> Mapping[str, str]:
     return {key: _display_env_value(key, os.environ.get(key)) for key in keys}
 
 
 def _read_rows(path: Path) -> list[dict[str, str]]:
-    try:
-        with path.open("r", encoding="utf-8-sig", newline="") as handle:
-            reader = csv.DictReader(handle)
-            headers = set(reader.fieldnames or ())
-            required_headers = {"key", "value", "required", "note"}
-            missing = required_headers - headers
-            if missing:
-                joined = ", ".join(sorted(missing))
-                raise RuntimeEnvError(f"{path} missing required columns: {joined}")
-            return list(reader)
-    except OSError as exc:
-        raise RuntimeEnvError(f"Cannot read runtime env file {path}: {exc}") from exc
+    last_decode_error: UnicodeDecodeError | None = None
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            with path.open("r", encoding=encoding, newline="") as handle:
+                reader = csv.DictReader(handle)
+                headers = set(reader.fieldnames or ())
+                required_headers = {"key", "value", "required", "note"}
+                missing = required_headers - headers
+                if missing:
+                    joined = ", ".join(sorted(missing))
+                    raise RuntimeEnvError(f"{path} missing required columns: {joined}")
+                return list(reader)
+        except UnicodeDecodeError as exc:
+            last_decode_error = exc
+            continue
+        except OSError as exc:
+            raise RuntimeEnvError(f"Cannot read runtime env file {path}: {exc}") from exc
+    raise RuntimeEnvError(
+        f"Cannot decode runtime env file {path}; supported encodings: utf-8-sig, gb18030."
+    ) from last_decode_error
 
 
 def _resolve_path_token(value: str, base_dir: Path) -> Path:
@@ -206,3 +229,14 @@ def _display_env_value(key: str, value: str | None) -> str:
     if is_secret_key(key):
         return f"<set; {len(value)} chars>"
     return value
+
+
+def _redact_assignment(value: str, marker: str) -> str:
+    upper_value = value.upper()
+    marker_index = upper_value.find(marker)
+    if marker_index < 0:
+        return value
+    equals_index = value.find("=", marker_index)
+    if equals_index < 0:
+        return value
+    return value[: equals_index + 1] + "<redacted>"

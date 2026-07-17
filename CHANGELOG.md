@@ -10,6 +10,7 @@ This changelog records actual engineering changes. It is not a leader-facing dai
   - `config/runtime_env.example.csv` documents local-only runtime variables;
   - `src/dev/runtime_env.py` loads `local_env/runtime_env.csv` without committing local paths or API keys;
   - `python -B -m src.dev.smoke_test` runs pytest with a local temp directory and optional real-data/API probes;
+  - Windows/Excel CSV encodings are accepted and secret-like notes are redacted in smoke output;
   - project-level `pytest.ini` temp-directory configuration remains intentionally deferred for today's end-of-day report.
 - Enabled prototype unknown bulk truck pricing:
   - known maintained truck rates still take priority;
