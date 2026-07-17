@@ -2,7 +2,7 @@
 
 Updated: 2026-07-16
 
-This document describes the current and target architecture of the route inference prototype.
+This document describes the current architecture and the next real-data integration boundary of the route inference prototype.
 
 ## Current Core Architecture
 
@@ -20,18 +20,32 @@ flowchart TD
     F["route_request.py"] --> G["unit_conversion.py"]
     G --> H["cost_rules.py"]
     E2 --> H
+    T["shipping_time_provider.py"]
+    P["customer_profile.py"]
 
     D2 --> I["EdgeCandidate in data_loaders.py"]
     H --> I
+    I --> O["demo_run.py local CSV output"]
 
-    I --> J["graph_builder.py legacy DiGraph"]
-    J --> K["route_planner.py legacy shortest path"]
+    D --> U["transport_edge.py"]
+    H --> U
+    T --> U
+    P --> U
+    U --> V["transport_graph.py MultiDiGraph"]
+    V --> W["route_search.py cost / time Dijkstra"]
+    W --> X["route_result.py segment explanations"]
 
-    L["demo_run.py"] --> C
+    J["graph_builder.py legacy DiGraph"] --> K["route_planner.py legacy shortest path"]
     M["demo_leader.py"] --> N["demo_leader_*.py"]
+    N --> U
+    N --> V
+    N --> W
+    N --> X
 ```
 
-## Target Core Architecture
+The formal model/search chain is implemented and verified with sanitized demo objects. The current real-data `EdgeCandidate` output is not yet connected to it.
+
+## Next Real-Data Integration Architecture
 
 ```mermaid
 flowchart TD
@@ -47,20 +61,20 @@ flowchart TD
     G --> H["cost_rules.py<br/>CostRuleEngine"]
     E2 --> H
 
-    I["shipping_time_provider.py<br/>planned"]
+    I["shipping_time_provider.py<br/>manual provider ready"]
     J["distance_provider.py<br/>road route interface"]
     J2["tencent_map_provider.py<br/>driving route adapter"]
-    K["customer_profile.py<br/>planned"]
+    K["customer_profile.py<br/>confirmed customer source required"]
 
-    D2 --> L["transport_edge.py<br/>planned"]
+    D2 --> L["transport_edge.py<br/>available or explicit review"]
     H --> L
     I --> L
     J --> J2
     J --> L
     K --> L
 
-    L --> M["graph_builder.py<br/>MultiDiGraph"]
-    M --> N["route_search.py / route_planner.py<br/>RouteSearchStrategy"]
+    L --> M["transport_graph.py<br/>MultiDiGraph"]
+    M --> N["route_search.py<br/>RouteSearchStrategy"]
     N --> O["route_result.py<br/>RouteSegment / RouteResult"]
 ```
 
@@ -162,7 +176,7 @@ Current disabled rule groups:
 
 ### Time And Distance Layer
 
-Current and planned files:
+Current files:
 
 - `src/shipping_time_provider.py`
 - `src/distance_provider.py`
@@ -176,26 +190,48 @@ Responsibilities:
 
 Current state:
 
+- `shipping_time_provider.py` defines shipping-time request/result structures, `ManualShippingTimeProvider`, and unconfigured JSON/database/API placeholders;
+- manual shipping time accepts positive values and normalizes hours, days, and minutes to internal hours;
+- missing, non-positive, non-numeric, unsupported-unit, or unconfigured-provider cases return `manual_review` without a usable time;
 - `distance_provider.py` defines road route request/result interfaces and internal conversion to kilometers/hours;
 - `tencent_map_provider.py` implements Tencent place search and normal driving-route adapters;
 - truck-route adapter exists as an optional future enhancement, not the current dependency;
-- manual shipping time is planned first;
+- `build_transport_edge()` combines resolved shipping time with freight-rate and cost results;
+- the real-data `EdgeCandidate` flow still does not supply shipping time to `TransportEdge`;
 - Tencent Maps must not be called directly from cost rules.
+
+### Customer Rule Layer
+
+File:
+
+- `src/customer_profile.py`
+
+Responsibilities:
+
+- preserve customer ID, factory node, private-terminal flag/node, allowed packaging/commodities, and their sources;
+- resolve private-terminal and transfer-terminal branches as mutually exclusive;
+- return manual review for unknown, missing-source, or contradictory profile data;
+- pre-filter confirmed transfer-port candidates by distance while requiring later cost/time comparison.
+
+Current boundary:
+
+- the model and filters are implemented;
+- the formal customer data source is still unknown, so production-like route generation must not guess the branch.
 
 ### Edge And Graph Layer
 
 Current files:
 
+- `src/transport_edge.py`
+- `src/transport_graph.py`
+- `src/route_search.py`
+- `src/route_result.py`
+
+Legacy compatibility files:
+
 - `src/graph_builder.py`
 - `src/route_planner.py`
 - `src/models.py`
-
-Target files:
-
-- `src/transport_edge.py`
-- upgraded `src/graph_builder.py`
-- `src/route_search.py` or upgraded `src/route_planner.py`
-- `src/route_result.py` or upgraded `src/models.py`
 
 Responsibilities:
 
@@ -206,7 +242,14 @@ Responsibilities:
 
 Current state:
 
-- graph and route planner are still legacy `DiGraph` baseline code.
+- `TransportEdge` requires positive order-segment cost and time plus trace fields before an edge is `available`;
+- `transport_graph.py` requires a `NodeRegistry` by default, builds `nx.MultiDiGraph`, uses edge IDs as keys, and records exclusions on the graph;
+- sanitized demos and unit tests may bypass registry validation only through the explicit `allow_unregistered_nodes=True` flag;
+- any graph-build exclusion prevents a route from being reported as resolved because the omitted edge may change reachability or optimality;
+- `route_search.py` searches cost and time independently, returns the chosen edge key per segment, and binds each result to a deterministic objective-weight graph signature;
+- `route_result.py` rehydrates complete segments, rejects stale search results, verifies source fields, checks route totals against segment sums, and exports explicit rows for no-path/manual-review outcomes;
+- legacy `graph_builder.py`, `route_planner.py`, and `models.py` remain for baseline compatibility only and are not the formal business implementation;
+- the formal chain is not yet populated from real `EdgeCandidate` records.
 
 ## Important Boundaries
 

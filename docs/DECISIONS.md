@@ -2,6 +2,8 @@
 
 This document records durable business and technical decisions. Add new decisions when rules change.
 
+Updated: 2026-07-16
+
 ## D-001: Prototype Scope
 
 Date: 2026-07-09
@@ -190,7 +192,7 @@ Date: 2026-07-10
 
 Decision:
 
-Use a `ShippingTimeProvider` interface. Current enabled source is manual input.
+Use a `ShippingTimeProvider` interface. The first enabled implementation is `ManualShippingTimeProvider`; JSON, database, and API implementations remain unconfigured placeholders until a reliable source is confirmed.
 
 Reason:
 
@@ -200,7 +202,11 @@ Implications:
 
 - Internal time unit should be hours.
 - Missing time must not become zero.
+- Manual input may be normalized from hours, days, or minutes into hours.
+- Missing, zero, negative, non-numeric, or unsupported-unit manual input requires manual review.
 - JSON/database/API providers are placeholders until a source is confirmed.
+- Placeholder providers must explain that they are unconfigured and must not return a usable time.
+- Tencent ordinary driving duration is road-route reference data and must not automatically replace manually confirmed shipping or operational time.
 
 ## D-012: Tencent Maps Must Be Behind DistanceProvider
 
@@ -337,3 +343,90 @@ Implications:
 - Do not store or print API keys.
 - API failures, no-permission responses, empty routes, and malformed route fields return `manual_review`.
 - Unknown-route truck cost rules remain disabled until latest-rate selection, provider integration, and business acceptance are complete.
+
+## D-019: Customer Private Terminal Determines The Second-Stage Chain
+
+Date: 2026-07-16
+
+Decision:
+
+The second-stage route structure is determined by whether the customer has a private terminal.
+
+Reason:
+
+A customer with a private terminal can receive the waterway segment directly, while a customer without one requires a transfer terminal and short-distance truck delivery. Sending both cases through the same chain would create physically incorrect routes.
+
+Implications:
+
+- With a private terminal: South Port -> customer private terminal -> delivery complete.
+- Without a private terminal: South Port -> candidate transfer terminal -> short-distance truck -> customer factory.
+- A private-terminal customer must not be routed through a transfer terminal.
+- `CustomerProfile` must contain a traceable source for the private-terminal flag and terminal node.
+- Until that data source exists, the system must not guess the route branch.
+- `customer_profile.py` implements the branch as `private_terminal` or `transfer_terminal`; unknown, missing-source, or contradictory profile data returns `manual_review` with no executable branch.
+
+## D-020: Candidate Transfer Ports Use Distance Only For Pre-Filtering
+
+Date: 2026-07-16
+
+Decision:
+
+Distance may be used to select the nearest K candidate transfer ports, but it cannot determine the final recommendation by itself.
+
+Reason:
+
+The geographically nearest port may not have the lowest maintained freight cost or the shortest total transport time.
+
+Implications:
+
+- Candidate generation may pre-filter the nearest K ports using a confirmed distance source.
+- Each retained candidate chain must calculate total cost and total time.
+- Cost-minimum and time-minimum routes are returned separately.
+- Straight-line distance must not be presented as final route optimality.
+- `prefilter_transfer_ports()` records K, confirmed distance source, deterministic ordering, and the requirement for downstream total-cost/total-time comparison.
+
+## D-021: Formal Graph Uses MultiDiGraph And Returns Edge Keys
+
+Date: 2026-07-16
+
+Decision:
+
+The formal transport graph must use `nx.MultiDiGraph` or an equivalent multi-edge directed structure. Route results must identify the selected edge key for every segment.
+
+Reason:
+
+The same origin and destination may have different transport modes, packaging, prices, sources, maintenance dates, costs, and times. A simple `DiGraph` overwrites parallel choices and loses the evidence needed for explanation.
+
+Implications:
+
+- The current `graph_builder.py` and `route_planner.py` remain legacy baseline code and must not be treated as the formal implementation.
+- `TransportEdge` must exist before real candidates enter the formal graph.
+- Missing cost or time must block or flag an edge; it must not default to zero.
+- Route output must include node sequence, edge keys, segment cost, segment time, transport mode, price source, rule trace, total cost, and total time.
+- Cost and time searches remain independent under D-004.
+- The formal implementation is split across `transport_edge.py`, `transport_graph.py`, `route_search.py`, and `route_result.py`; legacy `graph_builder.py`, `route_planner.py`, and `models.py` remain compatibility-only.
+- `transport_graph.py` excludes unavailable, duplicate-ID, and unknown-node edges with traceable issue records.
+- Formal graph construction requires `NodeRegistry` by default; only sanitized demos and unit tests may explicitly opt into unregistered nodes.
+- Any graph-build exclusion blocks a resolved recommendation because the omitted edge may change reachability or optimality.
+- `route_search.py` treats missing/invalid weights and same-node requests as `manual_review` rather than using NetworkX defaults or assuming zero transport.
+- Search outcomes carry a deterministic objective-weight graph signature, and `route_result.py` requires a new search when graph state changes before verifying edge keys and segment totals.
+
+## D-022: Bulk Shipping Supports Index And Explicit Manual Quote Modes
+
+Date: 2026-07-16
+
+Decision:
+
+North-to-South bulk shipping cost supports index calculation and manual quotation as separate, explicit modes.
+
+Reason:
+
+The two modes have different inputs and audit requirements. Treating an entered number ambiguously as either a unit price or a total price would make the segment cost unreliable.
+
+Implications:
+
+- Index unit price is `coal index * 1.12 + 2 yuan harbor sailing fee + 5 yuan profit` and total cost is the matched order quantity times that unit price.
+- Manual quotation must explicitly declare `unit_price` or `total_price` and record the original fee unit.
+- Manual unit price follows the same exact quantity-unit matching rules as other maintained rates.
+- Manual total price must use a total-amount yuan unit and is not multiplied by quantity again.
+- Shipping time remains a separate input under D-011 and is not derived from the cost mode.

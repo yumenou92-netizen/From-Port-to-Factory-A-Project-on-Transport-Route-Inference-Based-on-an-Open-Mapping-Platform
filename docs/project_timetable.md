@@ -1,5 +1,6 @@
 # 北港至客户工厂全链路运输路径推断原型 TimeTable
 
+> 状态说明（2026-07-16）：本文件是 7 月 15 日的历史工时规划快照，其中“未开始”和 Todo 不再代表当前工程进度。ShippingTimeProvider 至 RouteResult 的正式模型、MultiDiGraph、双目标搜索与解释结果已完成第一版；当前状态以根目录 `PLAN.md` 和 `docs/PROJECT_STATE.md` 为准。
 > 更新日期：2026-07-15  
 > 用途：内部开发进度和任务管理。时间为专注开发时间估算，不等同于领导汇报节奏。  
 > 当前主线：数据审计修正 -> FreightRate 收口 -> ShippingTimeProvider -> CustomerProfile -> TransportEdge -> MultiDiGraph -> 路径搜索。

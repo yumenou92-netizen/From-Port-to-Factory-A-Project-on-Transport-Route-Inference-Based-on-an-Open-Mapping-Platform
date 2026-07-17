@@ -1,204 +1,162 @@
 # PLAN.md
 
-This plan is the durable engineering plan for the route inference prototype. It supersedes older one-off SOP fragments when they conflict with current code and decisions.
-
 Updated: 2026-07-16
 
-## Current Development Principle
+本文件记录真实工程里程碑。较早的日计划、领导汇报和 7 月 9 日 SOP 仅作为历史材料；与当前代码或本计划冲突时，以代码、测试、`docs/DECISIONS.md` 和本文件为准。
 
-Build the prototype in dependency order:
+## 开发主线
 
 ```text
-data audit
--> node registry
--> coordinate provider
--> route request and unit validation
--> freight rate and cost rules
--> latest rate selection
--> shipping time provider
--> customer profile and route rules
--> transport edge
+数据审计
+-> 真实数据加载
+-> 节点注册与坐标确认
+-> 订单与单位校验
+-> FreightRate 与 CostRuleEngine
+-> 最新有效运价选择
+-> ShippingTimeProvider
+-> CustomerProfile 与路线分支
+-> TransportEdge
 -> MultiDiGraph
--> route search strategy
--> route result explanation
+-> RouteSearchStrategy
+-> RouteResult 与解释输出
 ```
 
-Do not jump to full path search until cost, time, node, and edge inputs are explainable.
+在费用、时间、节点和运输边可解释之前，不把真实业务候选直接写入正式路径图。
 
-## Two-Track Operating Model
+## 里程碑状态
 
-Development uses two tracks:
-
-| Track | Purpose | Source Of Truth | Output |
+| 阶段 | 里程碑 | 状态 | 当前验收结果 |
 |---|---|---|---|
-| Engineering track | Build and verify the system | Code, tests, Git, `PROJECT_STATE.md`, `DECISIONS.md` | Modules, tests, demos, changelog |
-| Reporting track | Manage stakeholder expectations | Verified engineering facts translated conservatively | Daily plans, work reports, leader demos |
+| 0 | 持久化项目记忆 | 已完成 | `AGENTS.md`、`PLAN.md`、`PROJECT_STATE.md`、`ARCHITECTURE.md`、`DECISIONS.md`、`CHANGELOG.md` 已建立并持续维护 |
+| 1 | JSON 数据审计与脱敏输出 | 已完成（第一版） | 可扫描 JSON/JSONL、统计字段与质量问题；详细输出留在 `output/`，提交报告保持脱敏 |
+| 2 | 真实数据加载 | 已完成（第一版） | 从 `DATA_DIR` 读取运价、地点经纬度和其他费用表；提供明确的文件、JSON 和字段异常 |
+| 3 | NodeRegistry | 已完成（第一版） | 稳定节点 ID、别名、坐标冲突和运价端点覆盖检查具有测试 |
+| 4 | 坐标与地图 Provider | 已完成（基础版） | 本地优先坐标解析、腾讯地点搜索和普通驾车距离/时间 Provider 已实现；正式业务回写与缓存未完成 |
+| 5 | RouteRequest 与单位校验 | 已完成（第一版） | `吨/箱/柜` 精确匹配；包装辅助验证；不匹配转人工复核 |
+| 6 | FreightRate 与 CostRuleEngine | 已完成（第一版） | 单价、人工总价、散船指数、散船人工报价和熟悉汽运运价具有统一结果与追溯 |
+| 7 | 最新有效运价选择 | 已完成（第一版） | 1970 比较基线、较新记录覆盖、同日冲突人工复核、完全重复去重均已实现 |
+| 8 | ShippingTimeProvider | 已完成（第一版） | 已定义统一请求/结果结构；`ManualShippingTimeProvider` 支持小时、天、分钟换算；缺失、零值、负数、非数值和未配置 Provider 均不会生成可用时间 |
+| 9 | CustomerProfile 与路线分支 | 已完成（第一版） | 已定义可追溯客户画像、未知/矛盾状态、两类互斥路线、包装/品种过滤和候选港前 K 距离预筛 |
+| 10 | TransportEdge | 已完成（第一版） | 已统一节点、订单段总费用、小时制时间、原始价格、来源、规则版本、计算过程和可用状态；缺字段不产生可搜索边 |
+| 11 | `nx.MultiDiGraph` 正式图 | 已完成（第一版） | `transport_graph.py` 使用 edge ID 作为 key 保留平行边，排除不可用、重复和未知节点边，不使用 0 默认值 |
+| 12 | RouteSearchStrategy | 已完成（第一版） | NetworkX Dijkstra 分别搜索成本最低和时效最优路径，显式返回节点和每段 edge key |
+| 13 | RouteResult 与解释输出 | 已完成（第一版） | 已输出分段费用、时间、方式、来源、规则、计算过程、总费用、总时间及人工复核/无路径状态 |
 
-The engineering track can move faster than the reporting track. The reporting track should stay factual, conservative, and staged so the project does not over-promise incomplete capabilities.
+## 当前阶段
 
-Leader-facing plans should emphasize:
+当前位于阶段 13 第一版完成、真实业务候选尚未接入正式图的确认点。
 
-- what is being clarified;
-- what has been locally verified;
-- what remains pending business confirmation;
-- what will be prepared for the next stage.
+模型和算法基线已经贯通：
 
-Leader-facing plans should not present unbuilt modules as complete or production-ready.
+```text
+CustomerProfile
+-> TransportEdge
+-> nx.MultiDiGraph
+-> cost / time 独立 Dijkstra
+-> RouteSegment / RouteResult
+```
 
-## Milestones
+下一步不是继续扩展抽象模型，而是取得缺失业务数据并把真实候选生成链接入上述正式模块：
 
-| Phase | Milestone | Status | Completion Standard |
-|---|---|---|---|
-| 0 | Durable project memory | Complete | `AGENTS.md`, `PLAN.md`, `CHANGELOG.md`, `docs/PROJECT_STATE.md`, `docs/ARCHITECTURE.md`, and `docs/DECISIONS.md` exist and reflect current scope |
-| 1 | Data audit and data-use report | Complete | JSON files audited; sanitized report and local quality output generated; sensitive output isolated |
-| 2 | Node registry | Complete | Standard node ids, alias handling, coordinate conflict reporting, and coverage checks implemented |
-| 3 | Coordinate and map provider | Complete second version | Local standard node registry resolves known coordinates; Tencent coordinate and driving-route providers exist behind explicit interfaces and read API key from environment only |
-| 4 | Route request and unit validation | Complete | Order units and price units match exactly; mismatches return manual review |
-| 5 | FreightRate and cost rules | Complete first version | Formal `FreightRate`, `CostRuleEngine`, corrected truck-rule boundary, and latest-rate entry boundary exist |
-| 6 | Latest freight-rate selection | Complete second version | Same business route selects the latest effective rate; missing dates use a traceable 1970 baseline and conflicts remain explicit |
-| 7 | ShippingTimeProvider | Not started | Manual provider enabled; JSON, database, and API providers reserved but disabled |
-| 8 | CustomerProfile and route filtering | Not started | Private-terminal and no-private-terminal route logic separated and tested |
-| 9 | TransportEdge | Not started | Standard edge contains node ids, cost, time, mode, packaging, source, and availability reason |
-| 10 | MultiDiGraph | Not started | Parallel edges are preserved and edge keys are returned in route results |
-| 11 | RouteSearchStrategy | Not started | Cost-minimum and time-minimum paths are searched separately |
-| 12 | RouteResult and explanation output | Not started | Segment-level and total-level costs, times, sources, and manual-review flags are explainable |
+1. 确认客户自有码头字段、码头节点和允许包装/品种的正式数据源；
+2. 提供北港至南港散船费用与运输时间，或确认第一批只覆盖南港至客户工厂；
+3. 将 `demo_run.py` 当前 `EdgeCandidate` 流程改为生成 `TransportEdge`，再进入正式图搜索；
+4. 对接前先解决真实运价端点缺节点和其他费用是否计入运输段的问题。
 
-## Immediate Work Queue
+## 已完成阶段：ShippingTimeProvider
 
-### Task 0: Durable Project Memory
+### 目标
 
-Status: complete.
+建立统一运输时间接口，第一版只启用人工输入，所有内部时间使用小时。
 
-Goal:
+### 计划文件
 
-- establish persistent project state files before further development;
-- reduce drift from chat-only memory and outdated SOP documents.
+- `src/shipping_time_provider.py`
+- `tests/test_shipping_time_provider.py`
+- `src/demo_leader_shipping_time.py`
+- `src/demo_leader.py`
 
-Deliverables:
+### 接口要求
 
-- `AGENTS.md`
-- `PLAN.md`
-- `CHANGELOG.md`
-- `docs/PROJECT_STATE.md`
-- `docs/ARCHITECTURE.md`
-- `docs/DECISIONS.md`
+- 已定义统一的请求和结果结构；
+- `ManualShippingTimeProvider` 接受正数时间并返回小时；
+- 支持小时、天和分钟换算为内部小时；
+- 缺失、零值、负数、非数值和不支持单位均转人工复核；
+- 已预留但不启用 `JsonShippingTimeProvider`、`DatabaseShippingTimeProvider`、`ApiShippingTimeProvider`；
+- 占位 Provider 被调用时明确说明未配置，不返回 0；
+- 不把腾讯普通驾车时间直接等同于散船或完整运输作业时间。
 
-Verification:
+### 验收标准
 
-- all six files exist;
-- no real business data is included;
-- Git status shows only intentional docs plus previously confirmed local changes.
+- 正常人工输入、单位转换、缺失和非法输入均有测试；
+- 全量 pytest 通过；
+- `python src\demo_leader.py shipping-time` 能解释当前来源和未接入来源；
+- 项目状态、架构、决策和变更记录已同步；
+- 敏感信息检查通过。
 
-### Task 1: Truck Cost Rule Review And Correction
+## 已完成阶段：正式路线模型与搜索
 
-Status: complete.
+### CustomerProfile
 
-Goal:
+- `src/customer_profile.py` 定义客户 ID、工厂节点、自有码头标志、自有码头节点、允许包装/品种和来源；
+- 未知标志、缺少来源、缺码头节点和字段矛盾均返回 `manual_review`；
+- 有自有码头客户不生成中转港路线，无自有码头客户不生成自有码头直达路线；
+- `prefilter_transfer_ports()` 只按确认距离筛前 K，结果明确要求继续比较总费用和总时间。
 
-- address the business feedback that the earlier truck-cost rule design was incorrect;
-- clarify known-route vs unknown-route truck billing before building `TransportEdge`.
+### TransportEdge
 
-Scope:
+`src/transport_edge.py` 已包含：
 
-- review `src/cost_rules.py`;
-- revise rule config names, statuses, disabled reasons, and calculation boundaries if needed;
-- keep unknown truck-route rules disabled until formula and distance provider are confirmed;
-- add or update tests proving incorrect or disabled truck rules cannot enter automatic recommendation.
+- `edge_id` / edge key；
+- `from_node_id`、`to_node_id`；
+- `transport_mode`、`packaging`；
+- 当前订单运输段总费用（元）；
+- 运输时间（小时）；
+- 原始价格、单位、价格来源和维护日期；
+- 距离及其来源；
+- 计费规则编号、版本和计算过程；
+- 数据来源、人工复核原因和可用状态。
 
-Verification:
+只有 `status="available"` 的边可以导出正式图；费用、时间、节点或追溯字段缺失时保留候选和原因，但不进入搜索。
 
-- `pytest` passes;
-- known freight-rate records still calculate through `FreightRate`;
-- unknown bulk truck rule records the revised `draft-2` piecewise parameters but is not active;
-- unknown container truck rule remains disabled and pending confirmation;
-- demo output can explain the boundary.
+### MultiDiGraph 与搜索
 
-### Task 1.5: Tencent Maps API Provider Spike
+- `src/transport_graph.py` 使用 `nx.MultiDiGraph`，不复用旧 `DiGraph` 作为正式业务图；
+- 正式建图默认必须提供 `NodeRegistry`；仅脱敏演示和单元测试可显式允许未注册节点；
+- 建图排除项会保留在图元数据中，并阻止输出错误的“已解决”推荐；
+- `src/route_search.py` 提供 `RouteSearchStrategy` 协议和 NetworkX Dijkstra 基线；
+- 成本和时间分别搜索，不创建未经确认的综合权重；
+- 缺节点、缺权重、同起终点和无路径均有显式状态；
+- 搜索结果绑定目标权重图签名，搜索后图发生变化时必须重新搜索；
+- `src/route_result.py` 返回节点、edge key、完整分段信息和严格分段求和结果；
+- 无路径和人工复核结果导出时保留一条状态行，不再从表格结果中消失；
+- `python src\demo_leader.py route-search` 可运行脱敏集成演示。
 
-Status: complete second version.
+### 验收结果
 
-Goal:
+- 阶段 9-13 新增 67 个 pytest 场景；
+- 全量测试：`213 passed in 1.20s`；
+- 领导演示：`customer-profile`、`transport-edge`、`transport-graph`、`route-search` 均可运行；
+- 真实业务数据尚未写入正式图，本次演示全部使用虚构节点和脱敏字段。
 
-- verify that Tencent Maps can be isolated behind provider modules before latest-rate selection continues;
-- support local-first coordinate lookup fallback and road distance/time probing without committing API keys.
+## 已知依赖与待确认项
 
-Scope:
+- 北港至南港真实散船数据尚未提供；模型接口可先设计，但不得假设数据内容。
+- 客户自有码头数据源尚未确认。
+- 陌生集装箱汽运公式仍待业务确认。
+- 陌生散粮汽运 `draft-2` 仍禁用，需距离 Provider 正式接入、业务验收和边界测试。
+- 真实运价 JSON 当前没有显式 `price_type`，加载器统一按 `unit_price` 解析；正式支持总价记录前必须扩展数据协议。
+- 其他费用表已加载但尚未进入运输段总费用。
+- 地图 API 获取的新坐标和路线结果尚未设计本地缓存及人工确认后的回写流程。
 
-- implement Tencent place-search coordinate provider;
-- implement Tencent normal driving-route provider for road distance and estimated time;
-- keep truck-route provider as optional future enhancement, not current dependency;
-- read `TENCENT_MAP_API_KEY` from local environment only;
-- use mocked unit tests rather than consuming live API quota.
+## 停止并确认条件
 
-Verification:
+遇到以下情况先停止实现并向用户确认：
 
-- provider tests pass with mocked Tencent responses;
-- API key is not written to code, docs, tests, Git, or output;
-- live API smoke test remains a local optional script.
-
-### Task 2: Latest Freight-Rate Selection
-
-Status: complete first version.
-
-Goal:
-
-- choose the latest maintained freight rate for the same business route.
-
-Scope:
-
-- define route identity using existing `FreightRate.business_route_key`;
-- prefer latest `maintained_at`;
-- define handling for missing dates and same-day conflicting records;
-- integrate selection before candidate edge generation.
-
-Verification:
-
-- tests cover old/new records, missing dates, same-day conflicts, and different route keys;
-- data audit remains full-history and is not filtered.
-
-Implemented behavior:
-
-- dated historical records are retained in the loaded bundle but only the latest unambiguous record enters candidate billing;
-- raw missing dates remain empty, while selection compares them using the baseline date `1970-01-01`;
-- any normally dated record therefore supersedes an otherwise equivalent undated historical record;
-- conflicting records on the latest date block automatic selection for that business route;
-- exact duplicate latest records are deduplicated deterministically for candidate generation.
-
-### Task 3: ShippingTimeProvider
-
-Goal:
-
-- define one interface for transport time.
-
-Scope:
-
-- implement `ManualShippingTimeProvider`;
-- reserve `JsonShippingTimeProvider`, `DatabaseShippingTimeProvider`, and `ApiShippingTimeProvider`;
-- standardize internal time unit as hours.
-
-Verification:
-
-- manual positive time returns valid hours;
-- missing or invalid time fails clearly;
-- disabled providers fail clearly.
-
-## Deferred Work
-
-- Formal integration of road distance provider into unknown-route truck pricing.
-- Customer profile source and private-terminal data.
-- Formal `TransportEdge`.
-- `nx.MultiDiGraph` upgrade.
-- Route search strategy and edge-key path output.
-- Production database or API service.
-- Frontend UI.
-
-## Stop Conditions
-
-Stop and ask for user/business confirmation if:
-
-- a cost formula is ambiguous or contradicted by business feedback;
-- a user-provided file, path, formula, unit, data source, effective date, direction, or enable/disable requirement is missing or conflicts with current project rules;
-- a required file or external API contract is missing;
-- a rule would require converting between `吨`, `箱`, and `柜`;
-- a route depends on unprovided North Port to South Port data;
-- a requested algorithm depends on the user's thesis code or paper files.
+- 公式、区间边界、单位、方向或价格类型存在歧义；
+- 需求与代码、测试或已确认决策冲突；
+- 需要在 `吨`、`箱`、`柜` 之间换算；
+- 需要使用尚未提供的北港至南港数据；
+- 需要启用陌生汽运草案规则；
+- 需要复现毕业论文算法但论文或源代码未提供；
+- 外部接口契约、权限或密钥管理方式不明确。

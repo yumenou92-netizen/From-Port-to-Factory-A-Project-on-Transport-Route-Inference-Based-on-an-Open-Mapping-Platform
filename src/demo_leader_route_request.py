@@ -7,7 +7,7 @@ def main() -> None:
     print("北港至客户工厂全链路运输路径推断原型")
     print("订单输入与计费校验展示")
     print("=" * 52)
-    print("本次展示只说明订单如何校验并形成运输段总费用，不代表完整路径搜索已经完成。")
+    print("本次展示聚焦订单校验和运输段总费用；完整搜索能力由 route-search 展示。")
 
     show_valid_examples()
     show_manual_review_examples()

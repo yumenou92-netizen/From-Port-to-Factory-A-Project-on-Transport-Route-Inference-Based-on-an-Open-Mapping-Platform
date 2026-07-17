@@ -40,6 +40,44 @@ This changelog records actual engineering changes. It is not a leader-facing dai
   - exact duplicate latest records are deterministically reduced to one candidate record;
   - `data_loaders.py` preserves full loaded history while filtering candidate generation;
   - `demo_leader.py latest-rate` provides a sanitized business-facing demonstration.
+- Added first-version shipping-time provider:
+  - `src/shipping_time_provider.py` defines `ShippingTimeRequest`, `ShippingTimeResult`, `ManualShippingTimeProvider`, and unconfigured JSON/database/API placeholders;
+  - manual inputs in hours, days, and minutes are normalized to internal hours;
+  - missing, zero, negative, non-numeric, unsupported-unit, and unconfigured-provider cases return `manual_review` without a usable time;
+  - `tests/test_shipping_time_provider.py` covers valid conversion, invalid inputs, result invariants, and placeholder providers;
+  - `src/demo_leader_shipping_time.py` and `demo_leader.py shipping-time` show the current source and unconnected future sources.
+- Added first-version customer profile and route branching:
+  - `src/customer_profile.py` preserves customer/factory/private-terminal fields and traceable sources;
+  - private-terminal and transfer-terminal branches are mutually exclusive;
+  - unknown, missing-source, and contradictory profile data returns `manual_review` without guessing;
+  - transfer-port distance is used only for deterministic nearest-K pre-filtering before cost/time comparison.
+- Added traceable formal transport edges:
+  - `src/transport_edge.py` combines `FreightRate`, `CostCalculationResult`, and `ShippingTimeResult`;
+  - only candidates with nodes, positive order-segment cost/time, and complete trace fields are `available`;
+  - missing values remain unavailable with explicit reasons and never default to zero.
+- Added the formal multi-edge graph:
+  - `src/transport_graph.py` builds `nx.MultiDiGraph` with edge IDs as keys;
+  - parallel transport options are preserved;
+  - unavailable, duplicate-ID, and unknown-node edges are excluded with issue records.
+  - production graph construction requires a `NodeRegistry` by default; sanitized demos/tests must opt in explicitly when using unregistered nodes;
+  - graph-build exclusions are retained on the graph and block resolved recommendations.
+- Added independent route search strategies:
+  - `src/route_search.py` defines the strategy protocol and NetworkX Dijkstra baseline;
+  - cost and time are searched separately;
+  - results retain each selected MultiDiGraph edge key;
+  - missing nodes, same-node requests, missing/invalid weights, and no-path cases have explicit statuses;
+  - search outcomes carry deterministic graph-weight signatures so mutated graphs require a new search.
+- Added explainable route results:
+  - `src/route_result.py` restores complete segments and trace fields from selected edge keys;
+  - route totals are checked against segment sums;
+  - row export preserves resolved segments plus explicit no-path/manual-review status rows;
+  - `demo_leader.py route-search` demonstrates different cost-minimum and time-minimum routes with sanitized objects.
+
+### Verification
+
+- Full pytest suite passed: `213 passed in 1.20s`.
+- `demo_leader.py` demos for shipping time, customer profile, transport edge, MultiDiGraph, and route search are runnable without real data or API keys.
+- Real business data remains outside the formal graph until customer profile, missing nodes, trunk-shipping inputs, and candidate integration are resolved.
 
 ### Notes
 

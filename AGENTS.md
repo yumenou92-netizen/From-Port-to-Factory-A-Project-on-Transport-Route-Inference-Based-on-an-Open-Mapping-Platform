@@ -1,234 +1,142 @@
 # AGENTS.md
 
-This file defines durable development rules for the port-to-customer route inference prototype. It is intended for Codex or any future coding agent working in this repository.
+本文件仅保存对后续开发长期有效的规范、约束和完成标准。当前进度、临时问题和下一步任务分别以 `PLAN.md` 与 `docs/PROJECT_STATE.md` 为准。
 
-## Project Positioning
+## 1. 项目定位
 
-Project name:
+项目名称：北港至客户工厂全链路运输路径推断原型。
 
-```text
-北港至客户工厂全链路运输路径推断原型
-```
+本项目是用于验证数据结构、业务规则、费用与时效计算、图建模和可解释路径搜索的 Python 原型，不是生产级调度系统、正式报价系统、数据库服务或前端产品。
 
-This repository is a Python prototype for business-rule validation and explainable route inference. It is not a production dispatching, quotation, database, backend, or frontend system.
+开发优先级始终是：规则正确、数据可追溯、异常显式、测试可复现。未经明确需求，不引入生产数据库、后端服务、前端和高并发基础设施。
 
-The current development goal is to build a maintainable prototype that can:
+## 2. 项目事实来源
 
-- read local business JSON data without committing the data;
-- standardize transport nodes;
-- validate order quantity units against freight price units;
-- calculate transport-segment total cost in yuan;
-- keep cost and time as independent weights;
-- later build a multi-edge graph and output explainable route results.
+继续开发前，按以下顺序核对事实：
 
-## Repository Structure
+1. 当前代码和测试结果；
+2. Git 状态、差异和提交记录；
+3. `AGENTS.md` 中的长期规范；
+4. `docs/DECISIONS.md` 中的已确认决策；
+5. `PLAN.md` 中的里程碑状态；
+6. `docs/PROJECT_STATE.md` 中的当前交接状态；
+7. `docs/ARCHITECTURE.md` 和 `CHANGELOG.md`。
 
-Current important paths:
+聊天记录、领导汇报、每日计划和演示材料不能单独作为工程完成状态的依据。
 
-```text
-src/
-  data_audit.py          # JSON data quality audit and sanitized report generation
-  data_loaders.py        # local JSON loading and candidate edge preparation
-  node_registry.py       # standard node ids, aliases, coordinate conflict checks
-  coordinate_provider.py # local-first coordinate confirmation and API fallback
-  distance_provider.py   # road distance/time provider interfaces
-  tencent_map_provider.py # Tencent Maps WebService adapter
-  route_request.py       # order request model and packaging/unit validation
-  unit_conversion.py     # exact unit matching and segment total cost conversion
-  freight_rate.py        # formal FreightRate model and evaluation entry point
-  latest_rate_selector.py # latest maintained rate selection and conflict review
-  cost_rules.py          # CostRuleEngine and traceable calculation results
-  graph_builder.py       # legacy DiGraph builder, pending MultiDiGraph upgrade
-  route_planner.py       # legacy shortest path baseline, pending strategy upgrade
-  demo_run.py            # mutable development integration script
-  demo_leader.py         # leader-facing demo menu
+## 3. 数据与敏感信息
 
-tests/
-  test_*.py              # pytest unit tests
+真实业务数据可以在本地读取、审计和验证，但不得提交或推送到 GitHub。
 
-docs/
-  PROJECT_STATE.md       # current verified engineering state
-  ARCHITECTURE.md        # current and target architecture
-  DECISIONS.md           # durable business and technical decisions
-```
+禁止提交：
 
-## Data And Privacy Rules
+- `data_REAL/`、`output/`；
+- 含真实值的 `.env`、`.env.local` 或其他密钥配置；
+- 腾讯地图或其他外部服务的 API Key；
+- 原始业务 JSON、Excel、CSV 和数据库导出；
+- 未脱敏的客户名称、路线、坐标、运价和费用明细；
+- 从真实数据生成且能够还原业务信息的报告或截图。
 
-Real business data may be read locally for development and validation, but must not be uploaded to GitHub.
+允许提交不含真实值的模板，例如 `.env.example` 和 `config/*.example.*`。
 
-Never commit:
+业务数据目录必须通过 `DATA_DIR` 或明确的本地运行配置传入。业务代码中不得硬编码个人电脑的绝对路径。腾讯地图密钥只能通过 `TENCENT_MAP_API_KEY` 注入，不得打印完整密钥。
 
-- `data_REAL/`;
-- `output/`;
-- `.env` or `.env.*` files containing API keys;
-- raw JSON business files such as freight rates, coordinates, or additional fees;
-- Excel workbooks containing business data;
-- customer names, route details, coordinate details, or raw price records unless explicitly sanitized.
-
-Data directory access must use `DATA_DIR` or local runtime configuration. Do not hardcode an absolute D drive business-data path in source code.
-
-Tencent Maps API access must use `TENCENT_MAP_API_KEY` from the local environment. Do not hardcode the key in source code, tests, docs, demos, shell scripts, committed config, or output files. Do not print the full key.
-
-The `.gitignore` must continue to ignore local business data folders and generated output folders.
-
-## Git Rules
-
-After each completed module, remind the user to commit. If the user authorizes it, commit and push to GitHub only after a sensitive-data check.
-
-Before every commit or push, run at least:
+`.gitignore` 必须持续屏蔽真实数据和本地输出。提交或推送前至少检查：
 
 ```powershell
 git status --short --branch
-git status --short --ignored data_REAL output
+git diff --cached --check
 git diff --cached --name-only
-git diff --cached --name-only | Select-String -Pattern "data_REAL|output|\.json$|\.xlsx$|\.xls$|\.csv$"
+git status --short --ignored data_REAL output
 git ls-files data_REAL output
+git ls-tree -r --name-only HEAD
 ```
 
-Before push, also check the committed tree:
+同时扫描暂存区和待推送提交中的密钥格式、真实数据路径及业务文件扩展名。发现可疑内容时停止提交或推送。
 
-```powershell
-git ls-tree -r --name-only HEAD | Select-String -Pattern "data_REAL|output|\.xlsx$|\.xls$|运价表\.json$|地点经纬度\.json$|其他费用表\.json$"
-```
+## 4. Git 规范
 
-If any sensitive match appears, stop and resolve the issue before committing or pushing.
+- 每完成一个可验收模块，提醒用户进行 Git 提交；只有得到明确授权后才提交或推送。
+- 提交采用文件白名单，避免 `git add .` 将本地材料混入版本库。
+- 推送前先 `git fetch` 并确认本地与远程是否分叉。
+- 不使用 `git push --force`、`git reset --hard` 或覆盖用户改动的命令，除非用户明确要求并理解影响。
+- 不修改、删除或提交与当前任务无关的未跟踪材料。
+- GitHub 用于版本管理和协同，不替代本地真实数据管理。
 
-## Run And Test Commands
+## 5. 开发流程
 
-Primary test command:
+每个功能按以下 SOP 推进：
 
-```powershell
-python -m pytest
-```
+1. 阅读当前状态、计划和相关决策；
+2. 定位并阅读用户引用的文件和现有代码；
+3. 检查公式、单位、方向、数据源、有效日期、接口契约和启用状态是否完整；
+4. 发现影响实现安全的缺漏或冲突时，先向用户确认；
+5. 在现有模块边界内做小范围修改；
+6. 为正常、异常和边界行为补充 pytest；
+7. 运行全量测试和必要的集成演示；
+8. 更新 `PLAN.md`、`docs/PROJECT_STATE.md`、`docs/DECISIONS.md` 或 `CHANGELOG.md`；
+9. 通过敏感信息检查后再提交或推送。
 
-If the default Python environment does not contain `pytest`, use the configured project/PyCharm virtual environment. Do not install dependencies into the repository without confirming the environment plan.
+不得根据不完整业务描述自行补齐关键公式或算法。若需要复现用户毕业论文算法，必须先取得论文、算法说明和源代码，不得猜测实现。
 
-Data audit requires `DATA_DIR`:
+## 6. 工程规范
 
-```powershell
-$env:DATA_DIR=(Resolve-Path ".\data_REAL").Path
-python -m src.data_audit
-```
+- 保持模块单一职责，避免巨型脚本和无必要重构。
+- 新代码使用类型注解；结构化数据优先使用 dataclass、明确的枚举状态或协议接口。
+- 文件不存在、JSON 错误、字段缺失、单位不支持、外部接口失败必须给出清晰异常或 `manual_review`。
+- 缺失费用或时间不得默认为 0。
+- 禁用或占位 Provider 被调用时必须明确失败或返回人工复核，不得伪造有效结果。
+- 费用、时间、运输方式、价格来源、规则编号、规则版本和原始数据来源需要保留追溯信息。
+- 真实业务主流程不得依赖 `sample_data/` 中的旧演示数据。
+- `demo_run.py` 是可持续修改的开发集成脚本；每个适合展示的模块通过 `demo_leader.py` 或独立领导演示入口呈现。
 
-Development demo:
+## 7. 已确认且长期有效的业务约束
 
-```powershell
-python src/demo_run.py
-```
+- 第一阶段终点“南方港口”和第二阶段起点“南方港口”是同一物理节点，必须共用 `node_id` 和坐标。
+- 坐标查询遵循“本地已知表优先，外部地图 API 兜底”；外部结果有歧义时转人工确认。
+- 道路距离和时间也遵循“已维护熟悉路线优先，地图 API 兜底”。腾讯地图普通驾车路线是当前可接受的基础能力，货车路线不是硬依赖。
+- 运输方式来自运价记录，不能由包装方式推断；包装方式仅用于辅助验证计费口径。
+- `吨`、`箱`、`柜` 只能分别匹配 `元/吨`、`元/箱`、`元/柜`，不得自动互换或折算。
+- 进入路径搜索的 `cost` 必须是当前订单当前运输段的总费用，内部单位为元；原始单位价格不得直接相加。
+- 时间内部统一使用小时。缺失时间不得视为 0。
+- `cost` 和 `time` 是两套独立权重；无业务系数时不得合并成综合权重。
+- 已维护的熟悉汽运路线优先采用最新有效运价；陌生汽运规则未经业务确认和完整测试不得自动启用。
+- 缺失维护日期的原始值保留为空，仅在最新运价比较时使用 `1970-01-01` 基准日期。
+- 同一业务键在最新有效日期存在不同记录时转人工确认；完全重复记录可确定性去重，但原始历史必须保留。
+- 客户有自有码头时路线为“南港 -> 客户自有码头 -> 交付”；没有自有码头时才经过候选中转港和短途汽运。
+- 候选中转港可以先按距离筛选前 K 个，但最终必须分别比较总费用和总时间，不能只按直线距离决定。
+- 正式图结构应使用 `nx.MultiDiGraph` 保存平行运输边，路径结果必须返回 edge key 和分段解释。
 
-Leader-facing demo:
+## 8. Provider 约束
 
-```powershell
-python src/demo_leader.py
-```
+- 外部坐标、距离、时间和未来数据源必须通过独立 Provider 接口接入，不得散落在费用规则、建图或搜索代码中。
+- 第一版运输时间使用人工输入 Provider；JSON、数据库和 API Provider 只预留接口，未确认数据源前不启用。
+- API 网络失败、无权限、超时、空结果或字段异常不得产生可用于路径搜索的值。
+- 地图 API 新坐标进入正式坐标表前需要本地缓存、来源记录和人工确认。
 
-## Development Workflow
+## 9. 汇报与工程双轨
 
-Use this order for feature work:
+工程口必须如实记录代码、测试、Git、数据覆盖、缺陷和阻塞。领导汇报口基于同一事实进行克制、阶段性的表达，用于需求和预期管理。
 
-1. Read `docs/PROJECT_STATE.md`.
-2. Check `PLAN.md`.
-3. Check `docs/DECISIONS.md` for durable business rules.
-4. Inspect current code before editing.
-5. Make narrowly scoped changes.
-6. Add or update pytest coverage for behavior changes.
-7. Run tests.
-8. Update `docs/PROJECT_STATE.md` and `CHANGELOG.md` when the project state changes.
-9. Run Git sensitive-data checks before commit or push.
+领导汇报不得虚构完成情况、数据来源或测试结果，也不得将未实现功能描述为已上线；同时不以工具辅助带来的开发速度作为汇报重点。工程状态始终以代码、测试和项目交接文件为准。
 
-Do not treat chat history as the only project memory. Durable decisions and status must be reflected in the Markdown files above.
+## 10. 完成标准
 
-## Input Completeness Check
+模块只有同时满足以下条件才能标记为完成：
 
-Before implementing or assisting with development work based on user-provided files, prompts, business rules, or requirements:
+- 实现已确认的行为和异常边界；
+- 正常、错误和边界场景具有 pytest 覆盖；
+- 全量测试通过，或明确记录无法通过的外部原因；
+- 需要展示时已有可运行 Demo；
+- 未提交敏感数据；
+- 状态、决策和变更文档已同步。
 
-1. Locate and read the referenced file instead of assuming the path or content.
-2. Check whether the provided material is internally complete enough for the requested change.
-3. Check for conflicts with current code, tests, `PLAN.md`, `docs/PROJECT_STATE.md`, and `docs/DECISIONS.md`.
-4. Check whether key inputs are missing, such as business formulas, units, data source, effective date, directionality, API contract, test expectation, or enable/disable status.
-5. If any missing or conflicting item affects implementation safety, stop and ask the user for confirmation before continuing.
-6. If there are only non-blocking assumptions, state them clearly and proceed conservatively.
+## 11. 线程交接与下班收尾
 
-Do not silently fill material business gaps with guesses.
+结束线程或工作日时：
 
-## Engineering Rules
-
-- Keep modules small and focused.
-- Prefer existing patterns over new abstractions.
-- Use type annotations for new Python code.
-- Use structured parsing and dataclasses where appropriate.
-- Do not silently coerce unsupported business units.
-- Do not mix raw unit prices such as `元/吨`, `元/箱`, and `元/柜`.
-- Convert every usable freight price to current-order segment total cost in yuan before route search.
-- Keep original price, unit, source, and maintenance date for explanation.
-- Keep `cost` and `time` independent; do not create a synthetic combined weight without a confirmed business coefficient.
-- Missing cost or time must not default to zero.
-- Placeholder providers must fail clearly when called.
-
-## Current Business Rules
-
-- The first-stage destination "南方港口" and second-stage origin "南方港口" are the same physical node and must use the same `node_id` and coordinates.
-- Coordinate confirmation is global and local-first: standard node registry and known coordinate tables must be checked before any external map API fallback.
-- Tencent Maps coordinate lookup and driving-route lookup are provider modules, not direct business logic.
-- Road distance/time lookup should use normal driving route first. Truck route is optional future enhancement for vehicle-specific restrictions, not a current hard dependency.
-- If the local coordinate table has no match and the provider is not configured or returns ambiguous results, return manual review instead of guessing.
-- Transport mode comes from freight-rate data; it must not be inferred from packaging.
-- Packaging is an auxiliary billing validation field.
-- Quantity and price units must match exactly:
-  - `吨` matches `元/吨`;
-  - `箱` matches `元/箱`;
-  - `柜` matches `元/柜`;
-  - `箱` and `柜` are not interchangeable.
-- Unit mismatch means `manual_review`, not automatic calculation.
-- Current real data covers South Port to customer/factory routes. North Port to South Port data is not yet provided.
-- Known truck routes should use maintained freight rates.
-- Same business route must pass latest-rate selection before candidate edge billing.
-- Missing maintenance dates remain `None` in raw records but use `1970-01-01` as the internal latest-rate comparison baseline.
-- Conflicting records on the same effective latest date require manual review.
-- Exact duplicate latest records may be deduplicated for candidate generation while raw history remains available for audit.
-- Unknown bulk truck-route rule is recorded as `draft-2` using the revised piecewise yuan-per-ton function, but remains disabled until distance provider, latest-rate selection, business acceptance, and boundary tests are complete.
-- Unknown container truck-route rule remains disabled and needs further business confirmation.
-- Shipping time currently comes from manual input only; JSON, database, and API providers are future placeholders.
-
-## Reporting Boundary
-
-Leader-facing reports are communication deliverables. Engineering state must be derived from current code, tests, Git status, `PLAN.md`, `docs/PROJECT_STATE.md`, and verified module behavior.
-
-Do not use leader-facing progress documents as the source of truth for actual development completion.
-
-## Stakeholder And Demand Management
-
-The project has two separate communication tracks:
-
-```text
-engineering track = actual code, tests, data status, blockers, and Git state
-reporting track   = conservative leader-facing progress, risks, and next-step framing
-```
-
-Rules for the engineering track:
-
-- Keep `docs/PROJECT_STATE.md`, `PLAN.md`, `CHANGELOG.md`, and `docs/DECISIONS.md` technically accurate.
-- Record real blockers, unimplemented modules, failed tests, and missing data sources.
-- Do not mark a module complete unless the completion standard in this file is met.
-
-Rules for the reporting track:
-
-- Use verified facts, but present progress conservatively.
-- Prefer staged language such as "梳理", "复核", "初步验证", "形成设计口径", and "为后续开发做准备" when the work is exploratory or foundational.
-- Do not over-promise delivery dates, automation ability, API readiness, or production reliability.
-- Do not expose unnecessary internal implementation speed or tool-assisted acceleration as a management headline.
-- Do not claim that unimplemented modules are complete.
-- Do not fabricate work, test results, data sources, or business confirmations.
-
-When a user asks for a leader-facing report, derive the content from the real engineering state, then translate it into conservative business-facing language. Keep actual engineering status and leader-facing narrative separate.
-
-## Completion Standard
-
-A module is complete only when:
-
-- the code implements the agreed behavior;
-- normal, error, and boundary cases have pytest coverage;
-- the demo or development script can show the behavior when useful;
-- sensitive data is not committed;
-- relevant status, decision, or changelog docs are updated;
-- tests pass or the failure reason is explicitly recorded.
+1. 检查代码、`git status`、`git diff`、近期提交和测试；
+2. 更新 `PLAN.md`、`docs/PROJECT_STATE.md` 和必要决策；
+3. 分开生成领导汇报和真实开发日志；
+4. 提交前执行敏感信息检查；
+5. 明确说明本地未提交内容、远程分叉、测试环境和下一步入口。
