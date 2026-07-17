@@ -22,6 +22,7 @@ from src.domain.cost_rules import (
     calculate_edge_cost,
     calculate_manual_shipping_cost,
     calculate_railway_cost,
+    calculate_unknown_truck_bulk_unit_price,
 )
 from src.domain.freight_rate import create_freight_rate
 from src.domain.route_request import RouteRequest
@@ -365,6 +366,33 @@ def test_known_truck_route_uses_maintained_freight_rate_with_trace():
     assert "freight_rate_unit_price/1.0" in result.calculation_detail
 
 
+def test_known_truck_route_still_prefers_maintained_rate_when_distance_is_available():
+    request = RouteRequest(500, "吨", "散粮", "测试粮种")
+    rate = create_freight_rate(
+        origin_name="测试南港",
+        destination_name="测试工厂",
+        transport_mode="汽运",
+        package_type="散粮",
+        commodity_scope="测试粮种",
+        raw_price=20,
+        raw_price_unit="元/吨",
+        price_type="unit_price",
+        price_source="测试既定汽运运价",
+    )
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(
+        request,
+        known_rate=rate,
+        distance_km=120,
+        distance_source="tencent_map_driving_route",
+    )
+
+    assert result.status == "valid"
+    assert result.total_cost_yuan == Decimal("10000")
+    assert result.rule_id == KNOWN_TRUCK_MAINTAINED_RATE_RULE.rule_id
+    assert result.price_source == "测试既定汽运运价"
+
+
 def test_known_truck_route_rejects_non_truck_rate():
     request = RouteRequest(500, "吨", "散粮", "测试粮种")
     rate = create_freight_rate(
@@ -387,10 +415,57 @@ def test_known_truck_route_rejects_non_truck_rate():
     assert "不是汽运既定路线" in result.message
 
 
+def test_unknown_bulk_truck_route_calculates_with_confirmed_distance():
+    request = RouteRequest(500, "吨", "散粮", "测试粮种")
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(
+        request,
+        distance_km=120,
+        distance_source="tencent_map_driving_route",
+    )
+
+    assert result.status == "valid"
+    assert result.total_cost_yuan == Decimal("40500.0")
+    assert result.rule_id == UNKNOWN_TRUCK_BULK_RULE.rule_id
+    assert result.rule_version == "draft-2"
+    assert result.price_unit == "元/吨"
+    assert "距离=120km" in result.calculation_detail
+    assert "距离来源=tencent_map_driving_route" in result.calculation_detail
+
+
+@pytest.mark.parametrize(
+    ("distance_km", "distance_source", "expected_message"),
+    [
+        (None, None, "distance_km 和 distance_source"),
+        (120, None, "缺少 distance_source"),
+        (None, "tencent_map_driving_route", "缺少 distance_km"),
+        (0, "tencent_map_driving_route", "必须大于 0"),
+        ("abc", "tencent_map_driving_route", "必须是数值"),
+    ],
+)
+def test_unknown_bulk_truck_route_requires_traceable_positive_distance(
+    distance_km,
+    distance_source,
+    expected_message,
+):
+    request = RouteRequest(500, "吨", "散粮", "测试粮种")
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(
+        request,
+        distance_km=distance_km,
+        distance_source=distance_source,
+    )
+
+    assert result.status == "manual_review"
+    assert result.total_cost_yuan is None
+    assert result.rule_id == UNKNOWN_TRUCK_BULK_RULE.rule_id
+    assert expected_message in result.message
+
+
 @pytest.mark.parametrize(
     ("package_type", "quantity_unit", "expected_rule", "expected_message", "expected_unit"),
     [
-        ("散粮", "吨", "unknown_truck_bulk_distance_tier", "DistanceProvider", "元/吨"),
+        ("散粮", "吨", "unknown_truck_bulk_distance_tier", "distance_km", "元/吨"),
         ("集装箱", "箱", "unknown_truck_container_distance", "公式方向", "元/箱"),
     ],
 )
@@ -421,18 +496,21 @@ def test_known_truck_rule_is_registered_as_enabled():
     assert registered.parameters["next_step"] == "latest_rate_selection"
 
 
-@pytest.mark.parametrize(
-    "rule",
-    [UNKNOWN_TRUCK_BULK_RULE, UNKNOWN_TRUCK_CONTAINER_RULE],
-)
-def test_unknown_truck_rules_are_registered_but_cannot_execute(rule):
-    registered = DEFAULT_COST_RULE_ENGINE.get_rule(rule.rule_id)
+def test_unknown_bulk_truck_rule_is_registered_as_enabled_for_confirmed_distance():
+    registered = DEFAULT_COST_RULE_ENGINE.get_rule(UNKNOWN_TRUCK_BULK_RULE.rule_id)
+
+    assert registered.enabled
+    assert registered.parameters
+
+
+def test_unknown_container_truck_rule_is_registered_but_cannot_execute():
+    registered = DEFAULT_COST_RULE_ENGINE.get_rule(UNKNOWN_TRUCK_CONTAINER_RULE.rule_id)
 
     assert not registered.enabled
     assert registered.parameters
     assert registered.disabled_reason
     with pytest.raises(DisabledCostRuleError, match="当前未启用"):
-        DEFAULT_COST_RULE_ENGINE.require_enabled(rule.rule_id)
+        DEFAULT_COST_RULE_ENGINE.require_enabled(UNKNOWN_TRUCK_CONTAINER_RULE.rule_id)
 
 
 def test_unknown_truck_rule_ids_and_versions_are_stable():
@@ -442,6 +520,9 @@ def test_unknown_truck_rule_ids_and_versions_are_stable():
     assert UNKNOWN_TRUCK_CONTAINER_RULE.rule_version == "draft-1"
     assert UNKNOWN_TRUCK_BULK_RULE.parameters["requires_distance_provider"] is True
     assert UNKNOWN_TRUCK_BULK_RULE.parameters["result_unit"] == "元/吨"
+    assert "tencent_map_driving_route" in UNKNOWN_TRUCK_BULK_RULE.parameters[
+        "accepted_distance_sources"
+    ]
     assert UNKNOWN_TRUCK_BULK_RULE.parameters["total_cost_formula"] == (
         "unit_price_yuan_per_ton * quantity_tons"
     )
@@ -464,7 +545,21 @@ def test_unknown_truck_bulk_draft_2_segments_are_recorded():
         {"max_km": Decimal("250"), "formula": "99 + (x - 150) * 0.5"},
         {"max_km": None, "formula": "149 + (x - 250) * 0.3"},
     )
-    assert "边界测试" in UNKNOWN_TRUCK_BULK_RULE.disabled_reason
+
+
+@pytest.mark.parametrize(
+    ("distance_km", "expected_unit_price"),
+    [
+        (20, Decimal("15")),
+        (30, Decimal("20")),
+        (100, Decimal("69.0")),
+        (150, Decimal("99.0")),
+        (250, Decimal("149.0")),
+        (300, Decimal("164.0")),
+    ],
+)
+def test_unknown_truck_bulk_unit_price_boundaries(distance_km, expected_unit_price):
+    assert calculate_unknown_truck_bulk_unit_price(distance_km) == expected_unit_price
 
 
 def test_cost_rule_registry_rejects_duplicate_rule_ids():

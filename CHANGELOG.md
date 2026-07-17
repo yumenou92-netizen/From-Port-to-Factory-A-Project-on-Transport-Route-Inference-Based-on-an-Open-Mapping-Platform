@@ -6,6 +6,12 @@ This changelog records actual engineering changes. It is not a leader-facing dai
 
 ### Changed
 
+- Enabled prototype unknown bulk truck pricing:
+  - known maintained truck rates still take priority;
+  - `unknown_truck_bulk_distance_tier` now calculates from positive, traceable `distance_km` and `distance_source`;
+  - Tencent Maps normal driving distance is accepted only through the geo provider contract;
+  - missing, invalid, or untraceable distance remains `manual_review`;
+  - unknown container truck pricing remains disabled pending formula confirmation.
 - Added a conservative real-data bridge:
   - `src/routing/real_data_bridge.py` converts billed `EdgeCandidate` rows into formal `TransportEdge` objects;
   - missing shipping time or missing node IDs remain `manual_review`;
@@ -45,7 +51,7 @@ This changelog records actual engineering changes. It is not a leader-facing dai
   - unknown truck routes return `manual_review`;
   - draft unknown-route formulas remain disabled until distance and business formulas are confirmed.
 - Integrated known truck-route policy into `data/loaders.py` candidate generation for freight-rate records whose transport mode is `汽运`.
-- Updated unknown bulk truck-route rule to revised `draft-2` piecewise yuan-per-ton parameters from `docs/最后一公里汽运计费规则算法设计_修订版.md`; rule remains disabled.
+- Updated unknown bulk truck-route rule to revised `draft-2` piecewise yuan-per-ton parameters from `docs/最后一公里汽运计费规则算法设计_修订版.md`; at that point it remained disabled until the 2026-07-17 confirmed-distance activation.
 - Added durable input-completeness rule: user-provided files, formulas, paths, and requirements must be checked for missing or conflicting implementation details before coding.
 - Added `src/geo/coordinate_provider.py` and tests for global local-first coordinate confirmation:
   - known coordinates resolve from `NodeRegistry`;

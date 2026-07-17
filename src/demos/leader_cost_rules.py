@@ -99,7 +99,7 @@ def show_invalid_unit_case() -> None:
 
 def show_truck_route_policy() -> None:
     print("\n六、场景 5：最后一公里汽运规则修正")
-    print("业务口径：熟悉路线优先取维护运价；陌生散粮规则已修订为草案但暂不启用。")
+    print("业务口径：熟悉路线优先取维护运价；陌生散粮路线可使用确认后的普通驾车距离计费。")
 
     request = RouteRequest(500, "吨", "散粮", "测试粮种")
     known_rate = create_freight_rate(
@@ -118,19 +118,26 @@ def show_truck_route_policy() -> None:
         request,
         known_rate=known_rate,
     )
-    unknown_result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(request)
+    unknown_without_distance = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(request)
+    unknown_with_distance = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(
+        request,
+        distance_km=120,
+        distance_source="tencent_map_driving_route",
+    )
 
     print(f"熟悉路线：{known_result.calculation_detail}")
     print(f"熟悉路线总费用：{known_result.total_cost_yuan}元")
-    print(f"陌生路线：{unknown_result.message}")
-    print("结论：没有既定运价时，当前不会把陌生汽运草案自动用于推荐。")
+    print(f"陌生路线缺距离：{unknown_without_distance.message}")
+    print(f"陌生路线有距离：{unknown_with_distance.calculation_detail}")
+    print(f"陌生路线总费用：{unknown_with_distance.total_cost_yuan}元")
+    print("结论：费用层只消费 geo 层确认后的距离，不直接调用地图 API。")
 
 
 def show_current_boundary() -> None:
     print("\n七、当前边界")
     print("当前 demo 展示的是费用计算防错能力。")
     print("完整路径搜索、客户自有码头规则和运输时间接口已由独立 Demo 展示。")
-    print("真实数据链当前仍停在 EdgeCandidate，需要后续组合费用、时间和客户分支后生成 TransportEdge。")
+    print("真实数据链已能把具备费用、节点和人工时间的 EdgeCandidate 转换为 TransportEdge。")
 
 
 if __name__ == "__main__":

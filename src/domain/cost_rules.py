@@ -165,12 +165,13 @@ UNKNOWN_TRUCK_BULK_RULE = CostRuleConfig(
     rule_version="draft-2",
     rule_name="陌生汽运路线散粮阶梯计费",
     rule_type="distance_tier",
-    enabled=False,
+    enabled=True,
     parameters={
         "requires_distance_provider": True,
         "distance_unit": "km",
         "result_unit": "元/吨",
         "total_cost_formula": "unit_price_yuan_per_ton * quantity_tons",
+        "accepted_distance_sources": ("confirmed_geo_provider", "tencent_map_driving_route"),
         "segments": (
             {"max_km": Decimal("20"), "formula": "15"},
             {"max_km": Decimal("30"), "formula": "20"},
@@ -180,10 +181,6 @@ UNKNOWN_TRUCK_BULK_RULE = CostRuleConfig(
             {"max_km": None, "formula": "149 + (x - 250) * 0.3"},
         ),
     },
-    disabled_reason=(
-        "等待腾讯地图 DistanceProvider、最新运价选择器、业务验收和边界测试完成后启用；"
-        "当前不得参与自动推荐。"
-    ),
 )
 
 UNKNOWN_TRUCK_CONTAINER_RULE = CostRuleConfig(
@@ -299,13 +296,15 @@ class CostRuleEngine:
         request: RouteRequest,
         *,
         known_rate: FreightRate | None = None,
+        distance_km: int | float | str | Decimal | None = None,
+        distance_source: str | None = None,
         price_source: str = "最后一公里汽运规则",
     ) -> CostCalculationResult:
         """Evaluate last-mile truck cost under the current business boundary.
 
-        Known truck routes use maintained freight rates. Unknown truck routes
-        are recorded as draft rules and must not auto-calculate until a distance
-        provider and business-confirmed formulas are available.
+        Known truck routes use maintained freight rates. Unknown bulk truck
+        routes may calculate only from an externally confirmed road distance;
+        this domain layer never calls map APIs or guesses missing distance.
         """
         if known_rate is not None:
             rule = self.require_enabled(KNOWN_TRUCK_MAINTAINED_RATE_RULE.rule_id)
@@ -342,6 +341,14 @@ class CostRuleEngine:
                 rate_packaging=known_rate.package_type,
                 price_unit=known_rate.raw_price_unit,
                 message=message,
+            )
+
+        if request.package_type == "散粮":
+            return self._calculate_unknown_truck_bulk(
+                request,
+                distance_km=distance_km,
+                distance_source=distance_source,
+                price_source=price_source,
             )
 
         return self._unknown_truck_review(request, price_source)
@@ -575,6 +582,124 @@ class CostRuleEngine:
             price_unit=price_unit,
             message=message,
         )
+
+    def _calculate_unknown_truck_bulk(
+        self,
+        request: RouteRequest,
+        *,
+        distance_km: int | float | str | Decimal | None,
+        distance_source: str | None,
+        price_source: str,
+    ) -> CostCalculationResult:
+        rule = self.require_enabled(UNKNOWN_TRUCK_BULK_RULE.rule_id)
+        validation = validate_request_billing(request)
+        if validation.requires_manual_review:
+            return _truck_review_result(rule, request, price_source, "；".join(validation.issues))
+
+        distance_message = _validate_distance_input(distance_km, distance_source)
+        if distance_message is not None:
+            return _truck_review_result(rule, request, price_source, distance_message)
+
+        distance = _positive_decimal(distance_km, "陌生汽运距离")
+        source = str(distance_source).strip()
+        try:
+            unit_price = calculate_unknown_truck_bulk_unit_price(distance)
+            total_cost = calculate_total_cost(
+                unit_price,
+                "元/吨",
+                request.quantity,
+                request.quantity_unit,
+            )
+        except (CostRuleError, UnitConversionError) as exc:
+            return _truck_review_result(rule, request, price_source, str(exc))
+
+        detail = (
+            f"陌生散粮汽运使用确认公路距离；距离={distance}km；"
+            f"距离来源={source}；单位运费={unit_price}元/吨；"
+            f"总费用={unit_price}元/吨×{request.quantity}{request.quantity_unit}={total_cost}元"
+        )
+        return CostCalculationResult(
+            status="valid",
+            total_cost_yuan=total_cost,
+            rule_id=rule.rule_id,
+            rule_version=rule.rule_version,
+            calculation_detail=detail,
+            price_source=f"{price_source}；距离来源={source}",
+            transport_mode="汽运",
+            rate_packaging=request.package_type,
+            price_unit="元/吨",
+            message="已按陌生散粮汽运阶梯规则和确认公路距离计算当前订单运输段总费用。",
+        )
+
+
+def calculate_unknown_truck_bulk_unit_price(
+    distance_km: int | float | str | Decimal,
+) -> Decimal:
+    """Return the draft-2 unknown bulk truck unit price in yuan per ton."""
+    distance = _positive_decimal(distance_km, "陌生汽运距离")
+    if distance <= Decimal("20"):
+        return Decimal("15")
+    if distance <= Decimal("30"):
+        return Decimal("20")
+    if distance <= Decimal("100"):
+        return Decimal("20") + (distance - Decimal("30")) * Decimal("0.7")
+    if distance <= Decimal("150"):
+        return Decimal("69") + (distance - Decimal("100")) * Decimal("0.6")
+    if distance <= Decimal("250"):
+        return Decimal("99") + (distance - Decimal("150")) * Decimal("0.5")
+    return Decimal("149") + (distance - Decimal("250")) * Decimal("0.3")
+
+
+def _truck_review_result(
+    rule: CostRuleConfig,
+    request: RouteRequest,
+    price_source: str,
+    message: str,
+) -> CostCalculationResult:
+    return CostCalculationResult(
+        status="manual_review",
+        total_cost_yuan=None,
+        rule_id=rule.rule_id,
+        rule_version=rule.rule_version,
+        calculation_detail=f"未计算：{message}",
+        price_source=price_source,
+        transport_mode="汽运",
+        rate_packaging=request.package_type,
+        price_unit="元/吨",
+        message=message,
+    )
+
+
+def _validate_distance_input(
+    distance_km: int | float | str | Decimal | None,
+    distance_source: str | None,
+) -> str | None:
+    source = str(distance_source).strip() if distance_source is not None else ""
+    if distance_km is None and not source:
+        return "陌生汽运散粮计费需要 geo 层提供确认后的 distance_km 和 distance_source。"
+    if distance_km is None:
+        return "陌生汽运散粮计费缺少 distance_km，不能只凭距离来源计算。"
+    if not source:
+        return "陌生汽运散粮计费缺少 distance_source，不能使用无法追溯的距离。"
+    try:
+        _positive_decimal(distance_km, "陌生汽运距离")
+    except CostRuleError as exc:
+        return str(exc)
+    return None
+
+
+def _positive_decimal(value: object, field_name: str) -> Decimal:
+    if isinstance(value, bool):
+        raise CostRuleError(f"{field_name}必须是数值，当前值：{value}")
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, AttributeError):
+        raise CostRuleError(f"{field_name}必须是数值，当前值：{value}") from None
+    if not number.is_finite():
+        raise CostRuleError(f"{field_name}必须是有限数值，当前值：{value}")
+    if number <= 0:
+        raise CostRuleError(f"{field_name}必须大于 0，当前值：{value}")
+    return number
 
 
 DEFAULT_COST_RULE_ENGINE = CostRuleEngine()

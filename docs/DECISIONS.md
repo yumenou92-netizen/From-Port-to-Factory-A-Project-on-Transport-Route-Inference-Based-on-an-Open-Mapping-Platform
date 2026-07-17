@@ -268,7 +268,7 @@ Date: 2026-07-16
 
 Decision:
 
-Last-mile truck cost must first check whether a maintained truck freight rate exists. If a known route rate exists, calculate through the maintained `FreightRate`. If no maintained rate exists, unknown-route truck rules stay in `manual_review` until distance provider and formulas are confirmed.
+Last-mile truck cost must first check whether a maintained truck freight rate exists. If a known route rate exists, calculate through the maintained `FreightRate`. If no maintained rate exists, unknown bulk-truck routes may calculate only when a traceable road distance is supplied by the geo layer.
 
 Reason:
 
@@ -277,9 +277,9 @@ Business feedback indicated the earlier generic truck-cost design was not reliab
 Implications:
 
 - `known_truck_maintained_rate` is the enabled policy for known truck routes.
-- `unknown_truck_bulk_distance_tier` records the revised `draft-2` piecewise yuan-per-ton function but remains disabled.
+- `unknown_truck_bulk_distance_tier` is enabled for prototype use only when both `distance_km` and `distance_source` are present.
 - `unknown_truck_container_distance` remains disabled and pending further business confirmation.
-- Unknown truck-route rules must not produce route-search costs yet.
+- Unknown bulk-truck routes without traceable distance remain `manual_review`.
 - The old simple idea `truck cost = distance × rate` is not a formal project rule.
 
 ## D-016: User-Provided Materials Must Be Checked Before Implementation
@@ -342,7 +342,7 @@ Implications:
 - Read Tencent API key only from `TENCENT_MAP_API_KEY`.
 - Do not store or print API keys.
 - API failures, no-permission responses, empty routes, and malformed route fields return `manual_review`.
-- Unknown-route truck cost rules remain disabled until latest-rate selection, provider integration, and business acceptance are complete.
+- Prototype unknown bulk-truck cost may consume `tencent_map_driving_route` distance through the geo provider interface; cost rules must not call Tencent Maps directly.
 
 ## D-019: Customer Private Terminal Determines The Second-Stage Chain
 
@@ -470,3 +470,23 @@ Implications:
 - `src/demos/real_data_run.py` may use `REAL_DATA_DEMO_MANUAL_TIME_HOURS` for local chain validation, but this is not a real business-time source.
 - Formal route recommendations based on that variable must be presented as integration validation only.
 - A future production path must replace the demo time variable with a confirmed manual, JSON, database, or API shipping-time source.
+
+## D-025: Prototype Unknown Bulk Truck Uses Confirmed Normal Driving Distance
+
+Date: 2026-07-17
+
+Decision:
+
+For prototype-stage last-mile unknown bulk-truck pricing, Tencent Maps normal driving distance is an accepted formal distance input after it has been obtained through the geo provider layer. `domain/cost_rules.py` only consumes `distance_km` and `distance_source`.
+
+Reason:
+
+The prototype must produce usable route-cost behavior before truck-specific driving data is available. Tencent truck routing may require paid or advanced permissions, while normal driving distance can validate the route-distance contract now. API keys and external calls must stay outside the domain cost layer.
+
+Implications:
+
+- Known maintained truck rates still take priority over unknown-route formulas.
+- `unknown_truck_bulk_distance_tier` can return a valid cost when `distance_km` is positive and `distance_source` is traceable.
+- Missing distance, missing source, non-positive distance, malformed distance, and unsupported packaging remain `manual_review`.
+- `unknown_truck_container_distance` remains disabled until the formula direction and box-ton conversion policy are confirmed.
+- Future production providers may replace normal driving distance with truck distance without changing the cost-rule interface.
