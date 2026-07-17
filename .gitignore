@@ -38,6 +38,8 @@ real_data/
 *运价表*.json
 *地点经纬度*.json
 *其他费用表*.json
+!src/data/
+!src/data/*.py
 *.xlsx
 *.xls
 *.xlsm

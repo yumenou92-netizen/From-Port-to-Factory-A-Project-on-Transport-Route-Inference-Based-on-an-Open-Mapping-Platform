@@ -26,11 +26,13 @@ flowchart TD
     D2 --> I["EdgeCandidate in data/loaders.py"]
     H --> I
     I --> O["demos/real_data_run.py local CSV output"]
+    I --> R["routing/real_data_bridge.py<br/>candidate to TransportEdge"]
 
     D --> U["routing/transport_edge.py"]
     H --> U
     T --> U
     P --> U
+    R --> U
     U --> V["routing/transport_graph.py MultiDiGraph"]
     V --> W["routing/route_search.py cost / time Dijkstra"]
     W --> X["routing/route_result.py segment explanations"]
@@ -42,7 +44,7 @@ flowchart TD
     N --> X
 ```
 
-The formal model/search chain is implemented and verified with sanitized demo objects. The current real-data `EdgeCandidate` output is not yet connected to it.
+The formal model/search chain is implemented and verified with sanitized demo objects. Real-data `EdgeCandidate` rows now have a conservative bridge into `TransportEdge`: they only become searchable when node IDs and explicit manual shipping time are present.
 
 ## Next Real-Data Integration Architecture
 
@@ -65,7 +67,12 @@ flowchart TD
     J2["geo/tencent_map_provider.py<br/>driving route adapter"]
     K["routing/customer_profile.py<br/>confirmed customer source required"]
 
-    D2 --> L["routing/transport_edge.py<br/>available or explicit review"]
+    RB["routing/real_data_bridge.py<br/>EdgeCandidate bridge"]
+    D2 --> RB
+    H --> RB
+    I --> RB
+    RB --> L["routing/transport_edge.py<br/>available or explicit review"]
+    D2 --> L
     H --> L
     I --> L
     J --> J2

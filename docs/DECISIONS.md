@@ -450,3 +450,23 @@ Implications:
 - New imports should use package paths such as `src.domain.cost_rules` and `src.routing.route_search`.
 - Do not add new top-level `src/demo_*.py` files.
 - Do not reintroduce the removed CSV/DiGraph prototype chain.
+
+## D-024: Real EdgeCandidate Bridge Requires Explicit Time
+
+Date: 2026-07-17
+
+Decision:
+
+Real-data `EdgeCandidate` rows may enter the formal graph only through `routing/real_data_bridge.py`, and only when they have both endpoint node IDs and an explicit shipping-time input.
+
+Reason:
+
+The current real data already supports order-segment cost calculation, but it does not provide complete transport time. Letting cost-only candidates enter graph search would create misleading fastest-time results.
+
+Implications:
+
+- Missing shipping time keeps the converted `TransportEdge` in `manual_review`.
+- Missing endpoint node IDs also keep the converted edge in `manual_review`.
+- `src/demos/real_data_run.py` may use `REAL_DATA_DEMO_MANUAL_TIME_HOURS` for local chain validation, but this is not a real business-time source.
+- Formal route recommendations based on that variable must be presented as integration validation only.
+- A future production path must replace the demo time variable with a confirmed manual, JSON, database, or API shipping-time source.

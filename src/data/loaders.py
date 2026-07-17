@@ -11,36 +11,20 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-try:
-    from .cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
-    from .freight_rate import FreightRate, FreightRateError, create_freight_rate
-    from .latest_rate_selector import (
-        LATEST_RATE_RULE_ID,
-        LATEST_RATE_RULE_VERSION,
-        LatestRateSelectionIssue,
-        effective_maintained_at,
-        select_latest_freight_rates,
-    )
-    from .route_request import (
-        RequestBillingValidation,
-        RouteRequest,
-        validate_request_billing,
-    )
-except ImportError:  # Support direct script-style imports used by demo scripts.
-    from src.domain.cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
-    from src.domain.freight_rate import FreightRate, FreightRateError, create_freight_rate
-    from src.domain.latest_rate_selector import (
-        LATEST_RATE_RULE_ID,
-        LATEST_RATE_RULE_VERSION,
-        LatestRateSelectionIssue,
-        effective_maintained_at,
-        select_latest_freight_rates,
-    )
-    from src.domain.route_request import (
-        RequestBillingValidation,
-        RouteRequest,
-        validate_request_billing,
-    )
+from src.domain.cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
+from src.domain.freight_rate import FreightRate, FreightRateError, create_freight_rate
+from src.domain.latest_rate_selector import (
+    LATEST_RATE_RULE_ID,
+    LATEST_RATE_RULE_VERSION,
+    LatestRateSelectionIssue,
+    effective_maintained_at,
+    select_latest_freight_rates,
+)
+from src.domain.route_request import (
+    RequestBillingValidation,
+    RouteRequest,
+    validate_request_billing,
+)
 
 
 REAL_RATE_FILE = "运价表.json"
@@ -196,10 +180,7 @@ def load_real_data_bundle(data_dir: str | Path) -> RealDataBundle:
     coordinate_rows = read_json_lines(find_required_file(root, REAL_COORDINATE_FILE))
     additional_fee_rows = read_json_lines(find_required_file(root, REAL_ADDITIONAL_FEE_FILE))
     nodes = [parse_node_record(row, index) for index, row in enumerate(coordinate_rows, start=1)]
-    try:
-        from .node_registry import build_node_registry
-    except ImportError:  # Support direct script-style imports used by demo scripts.
-        from src.domain.node_registry import build_node_registry
+    from src.domain.node_registry import build_node_registry
 
     node_registry = build_node_registry(nodes)
     freight_rates = []

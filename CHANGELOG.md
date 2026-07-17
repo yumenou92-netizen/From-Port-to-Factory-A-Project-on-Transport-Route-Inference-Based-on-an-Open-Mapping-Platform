@@ -6,6 +6,10 @@ This changelog records actual engineering changes. It is not a leader-facing dai
 
 ### Changed
 
+- Added a conservative real-data bridge:
+  - `src/routing/real_data_bridge.py` converts billed `EdgeCandidate` rows into formal `TransportEdge` objects;
+  - missing shipping time or missing node IDs remain `manual_review`;
+  - explicitly setting `REAL_DATA_DEMO_MANUAL_TIME_HOURS` lets `src/demos/real_data_run.py` validate the formal graph/search chain locally without claiming real business timing.
 - Reorganized `src` into functional packages:
   - `src/data` for data audit, real-data loading, and local output helpers;
   - `src/domain` for request, unit, node, freight-rate, latest-rate, and cost-rule models;
@@ -22,7 +26,7 @@ This changelog records actual engineering changes. It is not a leader-facing dai
 
 ### Verification
 
-- Full pytest suite passed after the restructuring.
+- Full pytest suite passed after the restructuring and real-data bridge.
 
 ## 2026-07-16
 

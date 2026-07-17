@@ -42,10 +42,11 @@ Updated: 2026-07-17
 | 12 | RouteSearchStrategy | 已完成（第一版） | NetworkX Dijkstra 分别搜索成本最低和时效最优路径，显式返回节点和每段 edge key |
 | 13 | RouteResult 与解释输出 | 已完成（第一版） | 已输出分段费用、时间、方式、来源、规则、计算过程、总费用、总时间及人工复核/无路径状态 |
 | 14 | 代码结构整理与旧原型剥离 | 已完成（第一版） | `src` 已按 `data/domain/geo/routing/demos` 分包；旧 CSV/DiGraph 原型代码和重复 demo 已剥离；演示入口改为 `python -m src.demos.leader` |
+| 15 | 真实 EdgeCandidate 接入正式链 | 已完成（保守第一版） | `routing/real_data_bridge.py` 可将已计费候选在显式人工时间下转换为 `TransportEdge`，进入 MultiDiGraph 并执行 cost/time 搜索；缺时间或缺节点仍转人工复核 |
 
 ## 当前阶段
 
-当前位于阶段 14 第一版完成、真实业务候选尚未接入正式图的确认点。
+当前位于阶段 15 保守第一版完成、真实业务候选可在显式人工时间下接入正式图的确认点。
 
 模型和算法基线已经贯通：
 
@@ -57,11 +58,11 @@ CustomerProfile
 -> RouteSegment / RouteResult
 ```
 
-下一步不是继续扩展抽象模型，而是取得缺失业务数据并把真实候选生成链接入上述正式模块：
+下一步不是继续扩展抽象模型，而是取得缺失业务数据并把真实候选生成链从“演示人工时间”推进到正式业务输入：
 
 1. 确认客户自有码头字段、码头节点和允许包装/品种的正式数据源；
 2. 提供北港至南港散船费用与运输时间，或确认第一批只覆盖南港至客户工厂；
-3. 将 `demos/real_data_run.py` 当前 `EdgeCandidate` 流程改为生成 `TransportEdge`，再进入正式图搜索；
+3. 将 `src/demos/real_data_run.py` 中的本地演示人工时间替换为正式运输时间来源；
 4. 对接前先解决真实运价端点缺节点和其他费用是否计入运输段的问题。
 
 ## 已完成阶段：ShippingTimeProvider
@@ -136,7 +137,7 @@ CustomerProfile
 ### 验收结果
 
 - 阶段 9-13 新增 67 个 pytest 场景；
-- 全量测试：`213 passed in 1.05s`；
+- 全量测试：`217 passed in 1.00s`；
 - 领导演示：`customer-profile`、`transport-edge`、`transport-graph`、`route-search` 均可运行；
 - 真实业务数据尚未写入正式图，本次演示全部使用虚构节点和脱敏字段。
 
@@ -148,6 +149,15 @@ CustomerProfile
 - `src/routing`：客户画像、运输时间、运输边、正式图、搜索和结果解释；
 - `src/demos`：领导展示、真实数据本地开发脚本和公开 API 探针；
 - 旧 `models.py`、`graph_builder.py`、`route_planner.py` 和重复的 `demo_cost_rules.py` 已从 `src` 剥离。
+
+## 已完成阶段：真实 EdgeCandidate 接入正式链
+
+- `src/routing/real_data_bridge.py` 将 `EdgeCandidate` 转换为正式 `TransportEdge`；
+- 转换只接受显式人工运输时间，默认缺时间时全部保留为 `manual_review`；
+- 双端节点完整且有人工时间的候选可进入 `src/routing/transport_graph.py`、`src/routing/route_search.py` 和 `src/routing/route_result.py`；
+- `src/demos/real_data_run.py` 默认只输出候选和人工复核；设置 `REAL_DATA_DEMO_MANUAL_TIME_HOURS` 后才运行本地正式图搜索验证；
+- 真实验证中默认缺时间时 314 条候选全部人工复核；设置本地演示时间后 144 条双端节点候选进入正式图并完成 cost/time 搜索；
+- 该演示时间只用于链路验证，不代表真实业务时效。
 
 ## 已知依赖与待确认项
 

@@ -1,4 +1,4 @@
-# PROJECT_STATE.md
+﻿# PROJECT_STATE.md
 
 Updated: 2026-07-17
 
@@ -141,6 +141,7 @@ ShippingTimeProvider
 
 - `TransportEdge` 统一节点、方式、包装、品种、订单段总费用、小时制时间、原始价格、维护日期、距离、来源、规则版本和计算过程。
 - 缺节点、费用、时间或追溯字段的候选保留为 `manual_review` 或 `not_applicable`，不会默认成 0。
+- `routing/real_data_bridge.py` 已能把真实 `EdgeCandidate` 转换为正式 `TransportEdge`；缺人工时间或缺节点时仍保持 `manual_review`。
 - `routing/transport_graph.py` 默认要求 `NodeRegistry`，使用 `nx.MultiDiGraph` 和 edge ID key 保存平行边；脱敏演示/测试必须显式声明允许未注册节点。
 - 不可用、重复 edge ID 或引用未注册节点的边不会进入图，并保留问题代码和原因；存在建图排除项时不得输出 `resolved` 推荐。
 
@@ -156,7 +157,7 @@ ShippingTimeProvider
 
 ### 3.11 Demo
 
-- `demos/real_data_run.py`：读取真实本地数据、构建订单计费候选并输出本地候选与人工复核 CSV。
+- `demos/real_data_run.py`：读取真实本地数据、构建订单计费候选、转换正式运输边并输出本地候选/人工复核 CSV；设置本地演示人工时间后可验证正式图搜索链。
 - `demos/leader.py`：统一入口展示各模块，默认运行双目标路径搜索与解释结果。
 - `demos/leader_shipping_time.py`：展示人工运输时间来源、小时制换算、非法输入人工复核和未接入数据源占位。
 - `demos/leader_customer_profile.py`：展示客户分支互斥、候选港预筛和缺数据人工复核。
@@ -167,9 +168,9 @@ ShippingTimeProvider
 
 ## 4. 当前正在处理的问题
 
-1. **真实数据正式链集成**：阶段 9-13 第一版及审查加固已完成；真实 `EdgeCandidate` 仍未转换为 `TransportEdge` 并进入正式图。
-2. **Git 分支分叉**：本地 `main` 有 2 个未推送功能提交，远程 `origin/main` 有 2 个 README 提交，本地状态为 `ahead 2, behind 2`。
-3. **真实业务链尚未接通**：`demos/real_data_run.py` 仍输出旧 `EdgeCandidate`；客户画像、运输时间和正式 `TransportEdge` 尚未从真实数据生成。
+1. **真实数据正式链集成**：真实 `EdgeCandidate` 已能在显式人工时间下转换为 `TransportEdge` 并进入正式图；默认缺时间仍全部人工复核。
+2. **Git 分支状态**：已 rebase 整合远程 README 提交；本地 `main` 当前为 `ahead 4`。本机 GitHub HTTPS 凭据不可用，`git fetch origin` 失败，推送前需修复凭据。
+3. **真实业务链尚未完全接通**：客户画像、正式运输时间来源、北港至南港散船数据和其他费用归属仍未接入。
 4. **节点覆盖不足**：真实数据验证中仍有运价端点无法映射到标准节点，不能进入后续正式图。
 
 ## 5. 已知缺陷与技术债
@@ -178,14 +179,14 @@ ShippingTimeProvider
 
 - `CustomerProfile` 模型和分支规则已实现，但正式客户数据源尚未提供。
 - 北港至南港散船费用和完整运输时间尚未提供，无法形成全链真实边。
-- `data/loaders.py` 的真实 `EdgeCandidate` 尚未改为组合费用、时间和客户规则的 `TransportEdge`。
+- 真实 `EdgeCandidate` 已可通过 `routing/real_data_bridge.py` 组合为 `TransportEdge`，但正式运输时间来源和客户规则数据仍未接入。
 - 真实运价候选仍有端点缺少标准节点 ID，不能加入正式图。
 - 其他费用是否计入运输段、计入哪一段尚未确认。
 
 ### 5.2 数据接入缺口
 
 - 当前真实数据主要覆盖南港至客户工厂，北港至南港散船运价和人工运输时间尚未提供。
-- `data_loaders.parse_freight_rate()` 当前把真实运价 JSON 全部解析为 `price_type="unit_price"`；真实数据协议尚不能表达人工总价运价。
+- `src/data/loaders.py` 的 `parse_freight_rate()` 当前把真实运价 JSON 全部解析为 `price_type="unit_price"`；真实数据协议尚不能表达人工总价运价。
 - `其他费用表.json` 已加载为 `AdditionalFee`，但尚未叠加到运输段总费用。
 - 腾讯地图新坐标和路线没有本地缓存、人工确认和正式表回写机制。
 - 当前主流程不会对未匹配节点自动调用腾讯坐标 Provider。
@@ -227,6 +228,7 @@ ShippingTimeProvider
 | `src/domain/latest_rate_selector.py` | 最新有效运价、冲突和重复处理 | 已完成第一版 |
 | `src/domain/cost_rules.py` | 统一费用规则引擎和追溯结果 | 已完成第一版；陌生汽运仍禁用 |
 | `src/routing/transport_edge.py` | 正式运输边、可用状态、来源和规则追溯 | 已完成第一版 |
+| `src/routing/real_data_bridge.py` | 真实 EdgeCandidate 到 TransportEdge/正式搜索链的保守桥接 | 已完成保守第一版；缺时间仍人工复核 |
 | `src/routing/transport_graph.py` | 正式 MultiDiGraph 构建、平行边和排除问题清单 | 已完成第一版 |
 | `src/routing/route_search.py` | cost/time 独立 Dijkstra 策略和 edge key 结果 | 已完成第一版 |
 | `src/routing/route_result.py` | 分段解释、汇总校验和行式导出 | 已完成第一版 |
@@ -286,7 +288,7 @@ python -m pytest -q
 本次实测结果：
 
 ```text
-213 passed in 1.05s
+217 passed in 1.00s
 ```
 
 真实数据集成验证：
@@ -351,66 +353,59 @@ python -m src.demos.tencent_map_probe
 
 ## 10. 最近修改内容
 
-### 当前未提交结构调整
+### 当前未提交真实链桥接改动
 
 主要内容：
 
-- 将主代码按功能包整理为 `src/data`、`src/domain`、`src/geo`、`src/routing` 和 `src/demos`；
-- 将领导展示、本地真实数据联调和公开 API 探针统一迁入 `src/demos`，调用方式改为 `python -m src.demos.leader ...`；
-- 从 `src` 剥离旧 CSV/DiGraph 原型文件 `models.py`、`graph_builder.py`、`route_planner.py`；
-- 删除与统一领导 Demo 重复的独立 `demo_cost_rules.py`；
-- 同步更新测试导入、Demo 导入、长期架构文档、决策记录和变更日志；
-- 已完成代码绝对路径扫描，`src` 和 `tests` 未发现硬编码本机项目路径。
+- 新增 `src/routing/real_data_bridge.py`，把真实计费候选转换为正式 `TransportEdge`；
+- 缺人工运输时间或缺节点 ID 的真实候选保持 `manual_review`；
+- `src/demos/real_data_run.py` 默认不伪造时间；只有设置 `REAL_DATA_DEMO_MANUAL_TIME_HOURS` 后才运行本地正式图搜索验证；
+- 更新 `PLAN.md`、`docs/ARCHITECTURE.md`、`docs/DECISIONS.md`、`docs/PROJECT_STATE.md` 和 `CHANGELOG.md`。
 
 ### 本地最新提交
 
 ```text
-f4814bc feat(routing): add formal route recommendation pipeline
+3888e7d refactor(structure): organize route prototype packages
 ```
 
 主要内容：
 
-- 新增正式路线推荐链路：运输时间、客户分支、标准运输边、MultiDiGraph 建图、cost/time 独立搜索和解释结果；
-- 阶段 8-13 对应测试和领导演示已提交；
-- 本地分支因此相对远程为 `ahead 2, behind 2`。
+- 将主代码按功能包整理为 `src/data`、`src/domain`、`src/geo`、`src/routing` 和 `src/demos`；
+- 删除旧 CSV/DiGraph 原型文件和重复 Demo；
+- 更新测试导入、Demo 导入和长期文档。
 
 ### 上一个本地功能提交
 
 ```text
-b17b350 feat(rates): select latest effective freight rates
+75674a3 feat(routing): add formal route recommendation pipeline
 ```
 
-主要内容是最新有效运价选择、1970 比较基线、同日冲突、重复记录处理及对应测试。
+主要内容是正式路线推荐链路：运输时间、客户分支、标准运输边、MultiDiGraph 建图、cost/time 独立搜索和解释结果。
 
-### 远程独有提交
+### 已整合的远程 README 提交
 
 ```text
 78aa04d Update README.md
 2f5e9a8 Update README.md
 ```
 
-两次提交只修改 `README.md` 标题区域。本地尚未 rebase 或 merge。
+两次提交只修改 `README.md` 标题区域；已通过 `git rebase origin/main` 整合到本地历史。`git fetch origin` 因本机 GitHub HTTPS 凭据不可用失败，推送前需修复凭据。
 
 ## 11. 本次提交范围与本地材料
 
-### 11.1 当前结构整理工作区改动
+### 11.1 当前真实链桥接工作区改动
 
-以下改动属于 2026-07-17 结构整理范围，提交前需作为同一组审阅：
+以下改动属于 2026-07-17 真实候选接入正式链范围，提交前需作为同一组审阅：
 
-- `AGENTS.md`
 - `PLAN.md`
 - `CHANGELOG.md`
 - `docs/ARCHITECTURE.md`
 - `docs/PROJECT_STATE.md`
 - `docs/DECISIONS.md`
-- `src/data/*`：数据审计、加载和 IO 工具；
-- `src/domain/*`：运价、规则、订单、节点和单位等业务领域对象；
-- `src/geo/*`：坐标、距离和腾讯地图 Provider；
-- `src/routing/*`：客户分支、运输时间、运输边、建图、搜索和结果解释；
-- `src/demos/*`：领导展示、本地真实数据联调和公开 API 探针；
-- `tests/*`：导入路径同步到新的功能包结构。
-
-旧文件 `src/models.py`、`src/graph_builder.py`、`src/route_planner.py` 和重复的 `src/demo_cost_rules.py` 已删除，不应在后续提交中恢复。
+- `src/data/loaders.py`：修正重构后的正式包导入；
+- `src/routing/real_data_bridge.py`：真实 `EdgeCandidate` 到正式 `TransportEdge`、MultiDiGraph 和双目标搜索的保守桥接；
+- `src/demos/real_data_run.py`：接入桥接验证，默认缺时间不搜索，显式本地时间才输出路线验证 CSV；
+- `tests/test_real_data_bridge.py`：覆盖有时间、缺时间、缺节点和正式搜索链。
 
 ### 11.2 保留并迁移的公开探针改动
 
@@ -440,20 +435,20 @@ b17b350 feat(rates): select latest effective freight rates
 ### 11.5 当前分支关系
 
 ```text
-main...origin/main [ahead 2, behind 2]
+main...origin/main [ahead 4]
 ```
 
-安全同步建议：先审阅本次文档修改并提交，再使用 rebase 整合远程 README 提交；全过程不得使用强制推送。
+远程 README 分叉已 rebase 整合。当前未推送原因是本机 GitHub HTTPS 凭据不可用；推送前需要先修复凭据或切换可用认证方式。
 
 ## 12. 下一步建议
 
-1. 审阅当前结构整理 diff，确认删除旧原型文件和迁移 Demo 文件符合预期。
-2. 在结构整理通过敏感信息检查后提交；不要加入 Office、PDF、图片、真实数据或 `output/`。
-3. 处理本地与远程分叉：在结构整理提交后执行 `git rebase origin/main`，整合远程 README 提交；全过程不得使用强制推送。
+1. 审阅当前真实链桥接 diff，确认 `REAL_DATA_DEMO_MANUAL_TIME_HOURS` 只作为本地链路验证开关。
+2. 在敏感信息检查和全量测试通过后提交；不要加入 Office、PDF、图片、真实数据或 `output/`。
+3. 修复 GitHub HTTPS 凭据后再执行 fetch/push；全过程不得使用强制推送。
 4. 取得并确认客户自有码头标志、码头节点、允许包装/品种的正式数据源；在此之前继续使用 `manual_review`，不得猜测。
 5. 确认北港至南港散船费用和时间来源，或明确第一批真实搜索只覆盖南港至客户工厂。
-6. 将 `src/demos/real_data_run.py` 的 `EdgeCandidate` 组合流程迁移到 `TransportEdge`，再调用 `routing/transport_graph.py`、`routing/route_search.py` 和 `routing/route_result.py`。
-7. 接入真实候选前处理缺节点 ID，并确认 `AdditionalFee` 应计入哪一个运输段。
+6. 将本地演示人工时间替换为正式运输时间来源。
+7. 接入真实候选前继续处理缺节点 ID，并确认 `AdditionalFee` 应计入哪一个运输段。
 
 ## 13. 明确禁止重新实施或推翻的已确认事项
 

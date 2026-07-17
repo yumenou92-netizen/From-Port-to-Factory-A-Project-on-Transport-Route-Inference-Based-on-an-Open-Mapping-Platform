@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from src.data.loaders import (
@@ -13,6 +14,12 @@ from src.data.loaders import (
 from src.data.io_utils import write_result_csv
 from src.domain.node_registry import analyze_freight_rate_node_coverage, build_node_registry
 from src.domain.route_request import RouteRequest, validate_request_billing
+from src.routing.real_data_bridge import (
+    ManualTimeInput,
+    build_real_candidate_route_recommendations,
+    build_transport_edges_from_candidates,
+)
+from src.routing.route_result import route_result_to_rows
 
 
 def main() -> None:
@@ -62,8 +69,55 @@ def main() -> None:
     project_root = Path(__file__).resolve().parents[2]
     output_path = project_root / "output" / "real_data_edge_candidates.csv"
     review_output_path = project_root / "output" / "real_data_edge_reviews.csv"
+    route_output_path = project_root / "output" / "real_data_route_recommendations.csv"
     write_result_csv([edge_candidate_to_row(candidate) for candidate in result.candidates], output_path)
     write_result_csv(build_review_rows(result, request), review_output_path)
+
+    manual_time_input = manual_time_from_env()
+    transport_edges = build_transport_edges_from_candidates(
+        result.candidates,
+        commodity=request.commodity,
+        default_manual_time=manual_time_input,
+    )
+    graph_ready_edges = build_transport_edges_from_candidates(
+        result.graph_ready_candidates,
+        commodity=request.commodity,
+        default_manual_time=manual_time_input,
+    )
+    available_edge_count = sum(1 for edge in transport_edges if edge.is_available)
+    manual_review_edge_count = sum(1 for edge in transport_edges if edge.requires_manual_review)
+    formal_route_status = "not_run"
+    formal_route_note = "缺少人工确认运输时间，正式图只保留人工复核边，不执行真实路线推荐。"
+    graph_added_edges = 0
+    graph_excluded_edges = 0
+    if manual_time_input is not None and graph_ready_edges:
+        start_node_id = graph_ready_edges[0].from_node_id
+        end_node_id = graph_ready_edges[0].to_node_id
+        if start_node_id and end_node_id:
+            formal_route = build_real_candidate_route_recommendations(
+                result.graph_ready_candidates,
+                commodity=request.commodity,
+                node_registry=registry,
+                start_node_id=start_node_id,
+                end_node_id=end_node_id,
+                default_manual_time=manual_time_input,
+            )
+            graph_added_edges = formal_route.graph_result.added_edge_count
+            graph_excluded_edges = formal_route.graph_result.excluded_edge_count
+            if formal_route.recommendations is not None:
+                route_rows = (
+                    route_result_to_rows(formal_route.recommendations.lowest_cost)
+                    + route_result_to_rows(formal_route.recommendations.fastest_time)
+                )
+                write_result_csv(route_rows, route_output_path)
+                formal_route_status = (
+                    f"lowest_cost={formal_route.recommendations.lowest_cost.status}; "
+                    f"fastest_time={formal_route.recommendations.fastest_time.status}"
+                )
+                formal_route_note = (
+                    "已使用本地演示人工时间将具备双端节点的真实候选接入正式图搜索；"
+                    "该时间仅用于本地链路验证，不代表真实业务时效。"
+                )
 
     print("")
     print("Order_Edge_Candidate_Preview")
@@ -84,11 +138,33 @@ def main() -> None:
     print(f"Local_Edge_Candidate_Preview_Output: {output_path}")
     print(f"Local_Manual_Review_Output: {review_output_path}")
     print("")
-    print("Current_Limit: Real data can be loaded and converted into total cost per order segment; shipping time and customer-owned dock fields are not connected yet, so full route search is not executed yet.")
+    print("Formal_Transport_Edge_Bridge")
+    print(f"Transport_Edges_Built: {len(transport_edges)}")
+    print(f"Available_Transport_Edges: {available_edge_count}")
+    print(f"Manual_Review_Transport_Edges: {manual_review_edge_count}")
+    print(f"Formal_Graph_Added_Edges: {graph_added_edges}")
+    print(f"Formal_Graph_Excluded_Edges: {graph_excluded_edges}")
+    print(f"Formal_Route_Status: {formal_route_status}")
+    if formal_route_status != "not_run":
+        print(f"Local_Route_Recommendation_Output: {route_output_path}")
+    print(f"Formal_Route_Note: {formal_route_note}")
+    print("")
+    print("Current_Limit: Real data can be loaded, billed, converted into TransportEdge, and connected to formal graph/search only when manual shipping time is explicitly provided. Customer-owned dock fields, north-port-to-south-port shipping data, and AdditionalFee segment attribution are still not connected.")
 
 
 def format_counter(counter) -> str:
     return "; ".join(f"{key}:{value}" for key, value in counter.most_common()) or "-"
+
+
+def manual_time_from_env() -> ManualTimeInput | None:
+    value = os.environ.get("REAL_DATA_DEMO_MANUAL_TIME_HOURS")
+    if value is None or not value.strip():
+        return None
+    return ManualTimeInput(
+        duration_value=value,
+        duration_unit=os.environ.get("REAL_DATA_DEMO_MANUAL_TIME_UNIT", "小时"),
+        source="REAL_DATA_DEMO_MANUAL_TIME_HOURS",
+    )
 
 
 if __name__ == "__main__":
