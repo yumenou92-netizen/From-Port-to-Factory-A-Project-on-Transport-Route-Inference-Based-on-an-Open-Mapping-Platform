@@ -13,6 +13,7 @@ from src.geo.tencent_map_provider import (
     TencentMapConfigError,
     TencentMapCoordinateProvider,
     TencentMapDrivingRouteProvider,
+    TencentMapHttpError,
     make_geo_point,
 )
 
@@ -175,3 +176,38 @@ def test_tencent_client_from_env_requires_api_key(monkeypatch):
 
     assert TENCENT_MAP_API_KEY_ENV in str(exc.value)
     assert "hardcode" in str(exc.value)
+
+
+def test_tencent_client_http_error_detail_does_not_leak_key(monkeypatch):
+    requests = pytest.importorskip("requests")
+
+    class FakeResponse:
+        status_code = 403
+        reason = "Forbidden"
+
+        def raise_for_status(self):
+            raise requests.HTTPError(
+                "403 Client Error with key=fake-secret",
+                response=self,
+            )
+
+    def fake_get(url, params, timeout):
+        assert params["key"] == "fake-secret"
+        return FakeResponse()
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    client = TencentMapClient("fake-secret")
+
+    with pytest.raises(TencentMapHttpError) as exc:
+        client.place_search(
+            keyword="瀹㈡埛A",
+            region="骞垮窞",
+            auto_extend=0,
+            page_size=5,
+        )
+
+    message = str(exc.value)
+    assert "HTTPError" in message
+    assert "status_code=403" in message
+    assert "Forbidden" in message
+    assert "fake-secret" not in message

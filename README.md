@@ -78,3 +78,16 @@ config/runtime_env.example.csv
 ```
 
 当前已知未完成项：项目级 `pytest.ini` 临时目录配置今天先跳过；开发者 smoke 入口内部已使用项目本地临时目录规避 Windows 默认 pytest 临时目录权限问题。
+
+## Developer Feature Demo
+
+```powershell
+python -B -m src.dev.feature_demo
+```
+
+This demo is for code understanding and daily feature review. When a core
+feature changes, update `src/dev/feature_demo.py` in the same commit so the
+current model behavior can be inspected from one stable entry. Use
+`src.dev.smoke_test` for pass/fail verification; use `src.dev.feature_demo` for
+human-readable behavior display. Tencent Maps is not called by this feature
+demo.

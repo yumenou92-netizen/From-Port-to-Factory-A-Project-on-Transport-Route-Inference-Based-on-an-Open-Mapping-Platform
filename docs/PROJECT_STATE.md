@@ -292,7 +292,7 @@ python -m pytest -q
 本次实测结果：
 
 ```text
-241 passed in 0.71s
+243 passed in 0.74s
 ```
 
 开发者统一冒烟测试入口：
@@ -300,6 +300,26 @@ python -m pytest -q
 ```powershell
 python -B -m src.dev.smoke_test
 ```
+
+开发者功能展示入口：
+
+```powershell
+python -B -m src.dev.feature_demo
+```
+
+该入口面向代码理解和功能变更复核，不替代 smoke test。今后核心功能变化时，应在同一提交中更新
+`src/dev/feature_demo.py`，用一个稳定入口展示当前模型行为、关键输入、状态、费用/时效结果和人工复核边界。
+该 demo 默认不调用腾讯地图 API，并且不会明文打印 API Key。
+
+腾讯地图公开点探针：
+
+```powershell
+python -B -m src.demos.tencent_map_probe
+```
+
+该入口现在会直接读取 `local_env/runtime_env.csv`，并打印坐标解析 `message`。本机当前实测已确认
+`TENCENT_MAP_API_KEY` 能加载，但腾讯地点检索返回 `ConnectionError`，说明当前阻塞点在 HTTP 连接层，
+不是本地环境表未读取，也不是公开测试地点候选歧义。
 
 该入口会：
 

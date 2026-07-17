@@ -363,13 +363,27 @@ def _requests_get_json(url: str, params: Mapping[str, Any], timeout_seconds: flo
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:
-        raise TencentMapHttpError(f"HTTP request failed for {url}") from exc
+        raise TencentMapHttpError(
+            f"HTTP request failed for {url}: {_safe_request_error_detail(exc)}"
+        ) from exc
     except ValueError as exc:
         raise TencentMapHttpError(f"HTTP response from {url} is not valid JSON") from exc
 
     if not isinstance(payload, Mapping):
         raise TencentMapHttpError(f"HTTP response from {url} is not a JSON object")
     return payload
+
+
+def _safe_request_error_detail(exc: Exception) -> str:
+    parts = [exc.__class__.__name__]
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    reason = str(getattr(response, "reason", "") or "").strip()
+    if status_code is not None:
+        parts.append(f"status_code={status_code}")
+    if reason:
+        parts.append(f"reason={reason}")
+    return "; ".join(parts)
 
 
 def _required_secret(value: object) -> str:

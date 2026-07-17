@@ -12,6 +12,14 @@ This changelog records actual engineering changes. It is not a leader-facing dai
   - `python -B -m src.dev.smoke_test` runs pytest with a local temp directory and optional real-data/API probes;
   - Windows/Excel CSV encodings are accepted and secret-like notes are redacted in smoke output;
   - project-level `pytest.ini` temp-directory configuration remains intentionally deferred for today's end-of-day report.
+- Added a developer feature-demo entry:
+  - `python -B -m src.dev.feature_demo` shows the current model behavior for code understanding and daily review;
+  - it displays runtime-env status, last-mile truck cost rules, latest-rate selection, formal graph/search behavior, and an optional real-data snapshot;
+  - it is a demonstration surface, not the pass/fail smoke-test gate, and it must be updated when core feature behavior changes.
+- Improved Tencent Maps probe diagnostics:
+  - `src/demos/tencent_map_probe.py` now loads `local_env/runtime_env.csv` directly for standalone runs;
+  - coordinate probe output prints manual-review messages so network, API, permission, and candidate-selection issues are distinguishable;
+  - HTTP errors include sanitized error type/status details without printing API keys.
 - Enabled prototype unknown bulk truck pricing:
   - known maintained truck rates still take priority;
   - `unknown_truck_bulk_distance_tier` now calculates from positive, traceable `distance_km` and `distance_source`;
