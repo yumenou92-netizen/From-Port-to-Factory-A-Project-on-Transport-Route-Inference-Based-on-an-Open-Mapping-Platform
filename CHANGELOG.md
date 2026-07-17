@@ -10,8 +10,11 @@ This changelog records actual engineering changes. It is not a leader-facing dai
   - known maintained truck rates still take priority;
   - `unknown_truck_bulk_distance_tier` now calculates from positive, traceable `distance_km` and `distance_source`;
   - Tencent Maps normal driving distance is accepted only through the geo provider contract;
-  - missing, invalid, or untraceable distance remains `manual_review`;
-  - unknown container truck pricing remains disabled pending formula confirmation.
+  - missing, invalid, or untraceable distance remains `manual_review`.
+- Enabled prototype unknown container truck pricing:
+  - `unknown_truck_container_distance` uses `500 元/箱` within 20 km;
+  - over 20 km it uses `500 + (distance_km - 20) * 30 * 0.55 元/箱`;
+  - it keeps the unit as `元/箱`, does not convert to `元/吨`, and does not silently treat `柜` as `箱`.
 - Added a conservative real-data bridge:
   - `src/routing/real_data_bridge.py` converts billed `EdgeCandidate` rows into formal `TransportEdge` objects;
   - missing shipping time or missing node IDs remain `manual_review`;

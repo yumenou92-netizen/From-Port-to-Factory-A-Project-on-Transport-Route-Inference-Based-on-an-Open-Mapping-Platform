@@ -278,8 +278,8 @@ Implications:
 
 - `known_truck_maintained_rate` is the enabled policy for known truck routes.
 - `unknown_truck_bulk_distance_tier` is enabled for prototype use only when both `distance_km` and `distance_source` are present.
-- `unknown_truck_container_distance` remains disabled and pending further business confirmation.
-- Unknown bulk-truck routes without traceable distance remain `manual_review`.
+- `unknown_truck_container_distance` is enabled for prototype use only when both `distance_km` and `distance_source` are present.
+- Unknown truck routes without traceable distance remain `manual_review`.
 - The old simple idea `truck cost = distance × rate` is not a formal project rule.
 
 ## D-016: User-Provided Materials Must Be Checked Before Implementation
@@ -488,5 +488,29 @@ Implications:
 - Known maintained truck rates still take priority over unknown-route formulas.
 - `unknown_truck_bulk_distance_tier` can return a valid cost when `distance_km` is positive and `distance_source` is traceable.
 - Missing distance, missing source, non-positive distance, malformed distance, and unsupported packaging remain `manual_review`.
-- `unknown_truck_container_distance` remains disabled until the formula direction and box-ton conversion policy are confirmed.
+- Unknown container truck pricing uses its own confirmed yuan-per-box formula and does not convert to yuan per ton.
 - Future production providers may replace normal driving distance with truck distance without changing the cost-rule interface.
+
+## D-026: Unknown Container Truck Uses Yuan-Per-Box Formula
+
+Date: 2026-07-17
+
+Decision:
+
+For prototype-stage unknown container last-mile truck pricing, keep the unit as `元/箱`. Do not convert the result to `元/吨`. Let `X` be confirmed road distance in kilometers:
+
+- if `X <= 20`, unit price is `500 元/箱`;
+- if `X > 20`, unit price is `500 + (X - 20) * 30 * 0.55 元/箱`;
+- total cost is unit price times the order quantity in boxes.
+
+Reason:
+
+Business confirmation clarified that the earlier minus sign was incorrect and that the cost should remain a box-based freight amount. The `30` factor is part of the confirmed business formula, not a reason for the system to convert the order to tons.
+
+Implications:
+
+- `unknown_truck_container_distance` is enabled when a positive `distance_km` and traceable `distance_source` are available.
+- Orders measured in `箱` can use this rule.
+- Orders measured in `柜` must not be silently treated as `箱`; they remain `manual_review` unless a separate unit policy is confirmed.
+- Known maintained truck rates still take priority.
+- Cost rules continue to consume geo-layer distance only and must not call Tencent Maps directly.

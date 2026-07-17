@@ -101,9 +101,9 @@ ShippingTimeProvider
 - 包装仅用于辅助验证，运输方式从运价记录读取。
 - 有效单位价格转换为当前订单当前运输段总费用，单位为元。
 - `CostCalculationResult` 保存状态、总费用、规则编号、版本、计算过程、来源、方式和单位。
-- 已实现既定运价单价、人工总价、散船指数、散船人工单价、散船人工总价、熟悉汽运维护运价和陌生散粮汽运距离阶梯计费。
-- 陌生散粮汽运只在外部提供可追溯 `distance_km` 和 `distance_source` 时计算；缺距离或缺来源仍返回 `manual_review`。
-- 陌生集装箱汽运规则已登记但保持禁用。
+- 已实现既定运价单价、人工总价、散船指数、散船人工单价、散船人工总价、熟悉汽运维护运价、陌生散粮汽运距离阶梯计费和陌生集装箱汽运元/箱公式计费。
+- 陌生散粮和陌生集装箱汽运都只在外部提供可追溯 `distance_km` 和 `distance_source` 时计算；缺距离或缺来源仍返回 `manual_review`。
+- 陌生集装箱汽运 20 公里内为 500 元/箱，20 公里以上为 `500 + (X - 20) * 30 * 0.55` 元/箱；不折算为元/吨。
 
 ### 3.5 FreightRate 与最新运价
 
@@ -169,9 +169,9 @@ ShippingTimeProvider
 
 ## 4. 当前正在处理的问题
 
-1. **陌生散粮汽运计费**：已可使用 geo 层确认的 `distance_km` 和 `distance_source` 计算；缺距离、缺来源或异常距离仍人工复核。
+1. **陌生汽运计费**：陌生散粮和陌生集装箱都已可使用 geo 层确认的 `distance_km` 和 `distance_source` 计算；缺距离、缺来源或异常距离仍人工复核。
 2. **真实数据正式链集成**：真实 `EdgeCandidate` 已能在显式人工时间下转换为 `TransportEdge` 并进入正式图；默认缺时间仍全部人工复核。
-3. **Git 分支状态**：远程 README 分叉已处理并由用户完成推送；本次陌生散粮汽运计费提交后，本地 `main` 预计为 `ahead 1`。
+3. **Git 分支状态**：远程 README 分叉已处理并由用户完成推送；本次陌生集装箱汽运计费提交后，本地 `main` 预计为 `ahead 2`。
 4. **真实业务链尚未完全接通**：客户画像、正式运输时间来源、北港至南港散船数据和其他费用归属仍未接入。
 5. **节点覆盖不足**：真实数据验证中仍有运价端点无法映射到标准节点，不能进入后续正式图。
 
@@ -228,7 +228,7 @@ ShippingTimeProvider
 | `src/domain/unit_conversion.py` | 单位精确匹配和总费用换算 | 已完成 |
 | `src/domain/freight_rate.py` | 正式运价模型 | 已完成第一版 |
 | `src/domain/latest_rate_selector.py` | 最新有效运价、冲突和重复处理 | 已完成第一版 |
-| `src/domain/cost_rules.py` | 统一费用规则引擎和追溯结果 | 已完成第一版；陌生散粮可用确认距离计费，陌生集装箱仍禁用 |
+| `src/domain/cost_rules.py` | 统一费用规则引擎和追溯结果 | 已完成第一版；陌生散粮和陌生集装箱均可用确认距离计费 |
 | `src/routing/transport_edge.py` | 正式运输边、可用状态、来源和规则追溯 | 已完成第一版 |
 | `src/routing/real_data_bridge.py` | 真实 EdgeCandidate 到 TransportEdge/正式搜索链的保守桥接 | 已完成保守第一版；缺时间仍人工复核 |
 | `src/routing/transport_graph.py` | 正式 MultiDiGraph 构建、平行边和排除问题清单 | 已完成第一版 |
@@ -395,18 +395,18 @@ python -m src.demos.tencent_map_probe
 
 ## 11. 本次提交范围与本地材料
 
-### 11.1 当前陌生散粮汽运计费工作区改动
+### 11.1 当前陌生集装箱汽运计费工作区改动
 
-以下改动属于 2026-07-17 陌生散粮汽运确认距离计费范围，提交前需作为同一组审阅：
+以下改动属于 2026-07-17 陌生集装箱汽运确认距离计费范围，提交前需作为同一组审阅：
 
 - `PLAN.md`
 - `CHANGELOG.md`
 - `docs/ARCHITECTURE.md`
 - `docs/PROJECT_STATE.md`
 - `docs/DECISIONS.md`
-- `src/domain/cost_rules.py`：启用陌生散粮汽运确认距离计费，保留熟悉路线优先和缺距离人工复核；
-- `src/demos/leader_cost_rules.py`：展示熟悉路线、陌生路线缺距离和陌生路线有确认距离三种结果；
-- `tests/test_cost_rules.py`：覆盖确认距离计费、缺距离/缺来源拦截、熟悉路线优先和阶梯边界。
+- `src/domain/cost_rules.py`：启用陌生集装箱汽运确认距离计费，保留熟悉路线优先、缺距离人工复核和箱/柜不混用；
+- `src/demos/leader_cost_rules.py`：展示熟悉路线、陌生路线缺距离、陌生散粮有距离和陌生集装箱有距离结果；
+- `tests/test_cost_rules.py`：覆盖集装箱 20 公里内、20 公里以上、缺距离/缺来源拦截、箱/柜不混用和熟悉路线优先。
 
 ### 11.2 保留并迁移的公开探针改动
 
@@ -436,7 +436,7 @@ python -m src.demos.tencent_map_probe
 ### 11.5 当前分支关系
 
 ```text
-main...origin/main [ahead 1 after current local commit]
+main...origin/main [ahead 2 after current local commit]
 ```
 
 远程 README 分叉已处理，用户已在本机完成上一轮推送。本轮提交完成后如需同步远程，按 SOP 先 `git fetch origin`，再执行普通 `git push`，不得使用强制推送。
@@ -466,7 +466,7 @@ main...origin/main [ahead 1 after current local commit]
 - 在最新同日冲突时任意选择一条记录；
 - 绕过 Provider，从费用规则、建图或搜索代码直接调用腾讯地图；
 - 将地图普通驾车时间直接当作完整散船或运输作业时间；
-- 启用尚未验收的陌生集装箱汽运规则；
+- 未经确认改变陌生集装箱汽运公式、单位或箱/柜换算口径；
 - 使用 `nx.DiGraph` 作为最终业务图并丢失平行边；
 - 只按直线距离决定中转港，不比较总费用和总时间；
 - 让有自有码头的客户仍经过中转港；

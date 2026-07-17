@@ -15,7 +15,6 @@ from src.domain.cost_rules import (
     CostRuleConfig,
     CostRuleEngine,
     CostRuleError,
-    DisabledCostRuleError,
     calculate_bulk_shipping_cost,
     calculate_bulk_shipping_total_cost,
     calculate_bulk_shipping_unit_price,
@@ -23,6 +22,7 @@ from src.domain.cost_rules import (
     calculate_manual_shipping_cost,
     calculate_railway_cost,
     calculate_unknown_truck_bulk_unit_price,
+    calculate_unknown_truck_container_unit_price,
 )
 from src.domain.freight_rate import create_freight_rate
 from src.domain.route_request import RouteRequest
@@ -433,6 +433,41 @@ def test_unknown_bulk_truck_route_calculates_with_confirmed_distance():
     assert "距离来源=tencent_map_driving_route" in result.calculation_detail
 
 
+def test_unknown_container_truck_route_calculates_with_confirmed_distance():
+    request = RouteRequest(10, "箱", "集装箱", "测试粮种")
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(
+        request,
+        distance_km=120,
+        distance_source="tencent_map_driving_route",
+    )
+
+    assert result.status == "valid"
+    assert result.total_cost_yuan == Decimal("21500.00")
+    assert result.rule_id == UNKNOWN_TRUCK_CONTAINER_RULE.rule_id
+    assert result.rule_version == "draft-1"
+    assert result.price_unit == "元/箱"
+    assert "距离=120km" in result.calculation_detail
+    assert "单箱运价=2150.00元/箱" in result.calculation_detail
+    assert "距离来源=tencent_map_driving_route" in result.calculation_detail
+
+
+def test_unknown_container_truck_route_does_not_treat_container_load_as_box():
+    request = RouteRequest(10, "柜", "集装箱", "测试粮种")
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(
+        request,
+        distance_km=20,
+        distance_source="tencent_map_driving_route",
+    )
+
+    assert result.status == "manual_review"
+    assert result.total_cost_yuan is None
+    assert result.rule_id == UNKNOWN_TRUCK_CONTAINER_RULE.rule_id
+    assert result.price_unit == "元/箱"
+    assert "订单数量单位为 柜" in result.message
+
+
 @pytest.mark.parametrize(
     ("distance_km", "distance_source", "expected_message"),
     [
@@ -463,10 +498,40 @@ def test_unknown_bulk_truck_route_requires_traceable_positive_distance(
 
 
 @pytest.mark.parametrize(
+    ("distance_km", "distance_source", "expected_message"),
+    [
+        (None, None, "distance_km 和 distance_source"),
+        (120, None, "缺少 distance_source"),
+        (None, "tencent_map_driving_route", "缺少 distance_km"),
+        (0, "tencent_map_driving_route", "必须大于 0"),
+        ("abc", "tencent_map_driving_route", "必须是数值"),
+    ],
+)
+def test_unknown_container_truck_route_requires_traceable_positive_distance(
+    distance_km,
+    distance_source,
+    expected_message,
+):
+    request = RouteRequest(10, "箱", "集装箱", "测试粮种")
+
+    result = DEFAULT_COST_RULE_ENGINE.calculate_last_mile_truck(
+        request,
+        distance_km=distance_km,
+        distance_source=distance_source,
+    )
+
+    assert result.status == "manual_review"
+    assert result.total_cost_yuan is None
+    assert result.rule_id == UNKNOWN_TRUCK_CONTAINER_RULE.rule_id
+    assert result.price_unit == "元/箱"
+    assert expected_message in result.message
+
+
+@pytest.mark.parametrize(
     ("package_type", "quantity_unit", "expected_rule", "expected_message", "expected_unit"),
     [
         ("散粮", "吨", "unknown_truck_bulk_distance_tier", "distance_km", "元/吨"),
-        ("集装箱", "箱", "unknown_truck_container_distance", "公式方向", "元/箱"),
+        ("集装箱", "箱", "unknown_truck_container_distance", "distance_km", "元/箱"),
     ],
 )
 def test_unknown_truck_route_returns_manual_review_without_cost(
@@ -503,14 +568,11 @@ def test_unknown_bulk_truck_rule_is_registered_as_enabled_for_confirmed_distance
     assert registered.parameters
 
 
-def test_unknown_container_truck_rule_is_registered_but_cannot_execute():
+def test_unknown_container_truck_rule_is_registered_as_enabled_for_confirmed_distance():
     registered = DEFAULT_COST_RULE_ENGINE.get_rule(UNKNOWN_TRUCK_CONTAINER_RULE.rule_id)
 
-    assert not registered.enabled
+    assert registered.enabled
     assert registered.parameters
-    assert registered.disabled_reason
-    with pytest.raises(DisabledCostRuleError, match="当前未启用"):
-        DEFAULT_COST_RULE_ENGINE.require_enabled(UNKNOWN_TRUCK_CONTAINER_RULE.rule_id)
 
 
 def test_unknown_truck_rule_ids_and_versions_are_stable():
@@ -526,11 +588,9 @@ def test_unknown_truck_rule_ids_and_versions_are_stable():
     assert UNKNOWN_TRUCK_BULK_RULE.parameters["total_cost_formula"] == (
         "unit_price_yuan_per_ton * quantity_tons"
     )
-    assert UNKNOWN_TRUCK_CONTAINER_RULE.parameters["over_20_formula_status"] == (
-        "requires_business_reconfirmation"
-    )
+    assert UNKNOWN_TRUCK_CONTAINER_RULE.parameters["over_20_formula_status"] == "business_confirmed"
     assert UNKNOWN_TRUCK_CONTAINER_RULE.parameters["unit_conversion_status"] == (
-        "do_not_auto_convert_box_to_ton"
+        "box_only_do_not_convert_to_ton"
     )
 
 
@@ -560,6 +620,18 @@ def test_unknown_truck_bulk_draft_2_segments_are_recorded():
 )
 def test_unknown_truck_bulk_unit_price_boundaries(distance_km, expected_unit_price):
     assert calculate_unknown_truck_bulk_unit_price(distance_km) == expected_unit_price
+
+
+@pytest.mark.parametrize(
+    ("distance_km", "expected_unit_price"),
+    [
+        (20, Decimal("500")),
+        (21, Decimal("516.50")),
+        (120, Decimal("2150.00")),
+    ],
+)
+def test_unknown_truck_container_unit_price_boundaries(distance_km, expected_unit_price):
+    assert calculate_unknown_truck_container_unit_price(distance_km) == expected_unit_price
 
 
 def test_cost_rule_registry_rejects_duplicate_rule_ids():

@@ -175,11 +175,12 @@ Current enabled rule groups:
 - bulk-shipping manual unit price;
 - bulk-shipping manual total price.
 - known truck maintained-rate calculation;
-- unknown bulk truck distance-tier calculation when `distance_km` and `distance_source` are supplied.
+- unknown bulk truck distance-tier calculation when `distance_km` and `distance_source` are supplied;
+- unknown container truck yuan-per-box calculation when `distance_km` and `distance_source` are supplied.
 
 Current disabled rule groups:
 
-- unknown truck-route container formula.
+- none for currently documented cost-rule prototypes; unsupported inputs still return `manual_review`.
 
 ### Time And Distance Layer
 
@@ -203,7 +204,7 @@ Current state:
 - `geo/distance_provider.py` defines road route request/result interfaces and internal conversion to kilometers/hours;
 - `geo/tencent_map_provider.py` implements Tencent place search and normal driving-route adapters;
 - truck-route adapter exists as an optional future enhancement, not the current dependency;
-- unknown bulk truck cost consumes confirmed road distance from the geo layer, and currently accepts Tencent normal driving distance as the prototype distance source;
+- unknown bulk and container truck costs consume confirmed road distance from the geo layer, and currently accept Tencent normal driving distance as the prototype distance source;
 - `build_transport_edge()` combines resolved shipping time with freight-rate and cost results;
 - the real-data `EdgeCandidate` flow still does not supply shipping time to `TransportEdge`;
 - Tencent Maps must not be called directly from cost rules.
