@@ -17,6 +17,20 @@ class CoordinateProviderError(ValueError):
 
 
 @dataclass(frozen=True)
+class CoordinateCandidate:
+    rank: int
+    title: str
+    address: str
+    category: str
+    longitude: float
+    latitude: float
+    city: str
+    district: str
+    province: str = ""
+    source_id: str = ""
+
+
+@dataclass(frozen=True)
 class CoordinateResolution:
     status: CoordinateResolutionStatus
     query_name: str
@@ -26,6 +40,8 @@ class CoordinateResolution:
     latitude: float | None
     source: str
     message: str
+    source_confidence: str | None = None
+    candidates: tuple[CoordinateCandidate, ...] = ()
 
     @property
     def is_resolved(self) -> bool:

@@ -6,3 +6,6 @@ REAL_DATA_DEMO_MANUAL_TIME_UNIT,小时,false,REAL_DATA_DEMO_MANUAL_TIME_HOURS �
 PYTHONPATH,.\.python_packages,false,当前 Windows 检出使用的本地依赖目录。
 SMOKE_RUN_REAL_DATA,true,false,DATA_DIR 存在时运行真实数据 smoke。
 SMOKE_RUN_TENCENT_PROBE,false,false,只有显式启用且存在 Key 时才调用腾讯地图公开点探针。
+TENCENT_MAP_PROBE_REGION,北京,false,Tencent 地图公开点探针区域；可在本地改为深圳等公开测试区域。
+TENCENT_MAP_PROBE_ORIGIN,北京大学,false,Tencent 地图公开点探针起点；可在本地改为深圳大学粤海校区紫薇斋等公开地点。
+TENCENT_MAP_PROBE_DESTINATION,北京站,false,Tencent 地图公开点探针终点；可在本地改为深圳站等公开地点。

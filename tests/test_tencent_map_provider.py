@@ -18,6 +18,27 @@ from src.geo.tencent_map_provider import (
 )
 
 
+def _place_candidate(
+    title: str,
+    *,
+    poi_id: str = "poi-1",
+    address: str = "test address",
+    category: str = "test category",
+    longitude: float = 113.2,
+    latitude: float = 23.1,
+    city: str = "Shenzhen",
+    district: str = "Nanshan",
+) -> dict[str, object]:
+    return {
+        "id": poi_id,
+        "title": title,
+        "address": address,
+        "category": category,
+        "location": {"lat": latitude, "lng": longitude},
+        "ad_info": {"city": city, "district": district},
+    }
+
+
 def test_tencent_coordinate_provider_resolves_unique_exact_candidate():
     seen: dict[str, object] = {}
 
@@ -49,6 +70,8 @@ def test_tencent_coordinate_provider_resolves_unique_exact_candidate():
     assert result.longitude == 113.2
     assert result.latitude == 23.1
     assert result.source == "tencent_map_place_search"
+    assert result.source_confidence == "exact_unique"
+    assert result.candidates == ()
     assert seen["keyword"] == "客户A"
     assert seen["boundary"] == "region(广州,0)"
     assert seen["key"] == "fake-secret"
@@ -83,8 +106,75 @@ def test_tencent_coordinate_provider_keeps_ambiguous_candidates_for_manual_revie
     assert not result.is_resolved
     assert result.status == "manual_review"
     assert "返回 2 个候选" in result.message
+    assert result.source_confidence == "manual_top5_candidates"
+    assert len(result.candidates) == 2
+    assert result.candidates[0].rank == 1
+    assert result.candidates[0].title == "客户A南门"
+    assert result.candidates[1].rank == 2
     assert result.longitude is None
     assert result.latitude is None
+
+
+def test_tencent_coordinate_provider_auto_selects_similar_top_candidate():
+    def fake_get_json(url, params, timeout_seconds):
+        return {
+            "status": 0,
+            "message": "query ok",
+            "data": [
+                _place_candidate("Shenzhen University Yuehai Campus", poi_id="poi-1"),
+                _place_candidate("Shenzhen-University Yuehai Campus", poi_id="poi-2"),
+                _place_candidate("Shenzhen University Yuehai Campus ", poi_id="poi-3"),
+            ],
+        }
+
+    client = TencentMapClient("fake-secret", get_json=fake_get_json)
+    provider = TencentMapCoordinateProvider(client, region="Shenzhen", page_size=20)
+
+    result = provider.resolve("Shenzhen University Yuehai Campus")
+
+    assert result.is_resolved
+    assert result.canonical_name == "Shenzhen University Yuehai Campus"
+    assert result.source_confidence == "auto_similar_top1"
+    assert result.longitude == 113.2
+    assert result.latitude == 23.1
+    assert result.candidates == ()
+
+
+def test_tencent_coordinate_provider_returns_top5_for_manual_candidate_review():
+    def fake_get_json(url, params, timeout_seconds):
+        return {
+            "status": 0,
+            "message": "query ok",
+            "data": [
+                _place_candidate(
+                    f"Candidate {index}",
+                    poi_id=f"poi-{index}",
+                    longitude=113.0 + index,
+                    latitude=23.0 + index,
+                )
+                for index in range(1, 7)
+            ],
+        }
+
+    client = TencentMapClient("fake-secret", get_json=fake_get_json)
+    provider = TencentMapCoordinateProvider(client, region="Shenzhen", page_size=20)
+
+    result = provider.resolve("Different Place")
+
+    assert not result.is_resolved
+    assert result.status == "manual_review"
+    assert result.source_confidence == "manual_top5_candidates"
+    assert len(result.candidates) == 5
+    assert [candidate.rank for candidate in result.candidates] == [1, 2, 3, 4, 5]
+    assert [candidate.title for candidate in result.candidates] == [
+        "Candidate 1",
+        "Candidate 2",
+        "Candidate 3",
+        "Candidate 4",
+        "Candidate 5",
+    ]
+    assert result.candidates[0].source_id == "poi-1"
+    assert result.candidates[-1].source_id == "poi-5"
 
 
 def test_tencent_coordinate_provider_api_error_does_not_leak_key():

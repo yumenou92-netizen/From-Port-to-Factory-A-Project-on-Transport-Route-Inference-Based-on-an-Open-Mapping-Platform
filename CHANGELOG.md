@@ -20,6 +20,12 @@ This changelog records actual engineering changes. It is not a leader-facing dai
   - `src/demos/tencent_map_probe.py` now loads `local_env/runtime_env.csv` directly for standalone runs;
   - coordinate probe output prints manual-review messages so network, API, permission, and candidate-selection issues are distinguishable;
   - HTTP errors include sanitized error type/status details without printing API keys.
+- Implemented Tencent Maps multi-candidate coordinate selection in the formal geo layer:
+  - `CoordinateResolution` can now carry `source_confidence` and structured manual-review candidates;
+  - unique candidates resolve normally, highly similar top candidates can auto-select top 1 with `source_confidence=auto_similar_top1`;
+  - ambiguous place-search results return top 5 candidate records for manual selection instead of requiring a GUI popup;
+  - `src/demos/tencent_map_probe.py` prints candidate rank, title, address, category, area, and coordinates for local review;
+  - Tencent probe region/origin/destination can be overridden with local-only runtime env entries while the committed default remains public Beijing points.
 - Enabled prototype unknown bulk truck pricing:
   - known maintained truck rates still take priority;
   - `unknown_truck_bulk_distance_tier` now calculates from positive, traceable `distance_km` and `distance_source`;

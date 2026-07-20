@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Mapping
 
 try:
-    from .coordinate_provider import CoordinateProviderError, CoordinateResolution
+    from .coordinate_provider import (
+        CoordinateCandidate,
+        CoordinateProviderError,
+        CoordinateResolution,
+    )
     from .distance_provider import (
         GeoPoint,
         RoadRouteRequest,
@@ -14,7 +20,11 @@ try:
         TruckRouteRequest,
     )
 except ImportError:  # Support direct script-style imports used by demo scripts.
-    from src.geo.coordinate_provider import CoordinateProviderError, CoordinateResolution
+    from src.geo.coordinate_provider import (
+        CoordinateCandidate,
+        CoordinateProviderError,
+        CoordinateResolution,
+    )
     from src.geo.distance_provider import (
         GeoPoint,
         RoadRouteRequest,
@@ -28,6 +38,9 @@ PLACE_SEARCH_URL = "https://apis.map.qq.com/ws/place/v1/search"
 DRIVING_ROUTE_URL = "https://apis.map.qq.com/ws/direction/v1/driving/"
 TRUCKING_ROUTE_URL = "https://apis.map.qq.com/ws/direction/v1/trucking"
 DEFAULT_TIMEOUT_SECONDS = 10.0
+MANUAL_REVIEW_CANDIDATE_LIMIT = 5
+AUTO_SIMILAR_TOP_COUNT = 3
+AUTO_SIMILARITY_THRESHOLD = 0.9
 
 HttpGetJson = Callable[[str, Mapping[str, Any], float], Mapping[str, Any]]
 
@@ -55,6 +68,14 @@ class TencentMapPlaceCandidate:
     province: str
     city: str
     district: str
+
+
+@dataclass(frozen=True)
+class CoordinateCandidateSelection:
+    selected: TencentMapPlaceCandidate | None
+    reason: str
+    source_confidence: str | None
+    review_candidates: tuple[CoordinateCandidate, ...] = ()
 
 
 class TencentMapClient:
@@ -160,8 +181,9 @@ class TencentMapCoordinateProvider:
     """Tencent Maps place-search based coordinate provider.
 
     This provider is intended as the fallback after local known-coordinate
-    tables fail. It accepts only unique or uniquely exact Tencent candidates.
-    Ambiguous search results stay in manual review.
+    tables fail. It accepts unique candidates and conservatively auto-selects
+    highly similar top Tencent candidates. Other ambiguous results stay in
+    manual review with structured candidate details.
     """
 
     def __init__(
@@ -222,13 +244,16 @@ class TencentMapCoordinateProvider:
         if not candidates:
             return _coordinate_manual_review(query_name, "腾讯地图地点搜索未返回可用候选坐标。")
 
-        selected, reason = _select_coordinate_candidate(query_name, candidates)
-        if selected is None:
+        selection = _select_coordinate_candidate(query_name, candidates)
+        if selection.selected is None:
             return _coordinate_manual_review(
                 query_name,
-                f"腾讯地图地点搜索返回 {len(candidates)} 个候选，{reason}，需要人工确认坐标。",
+                f"腾讯地图地点搜索返回 {len(candidates)} 个候选，{selection.reason}，需要人工确认坐标。",
+                source_confidence=selection.source_confidence,
+                candidates=selection.review_candidates,
             )
 
+        selected = selection.selected
         return CoordinateResolution(
             status="resolved",
             query_name=query_name,
@@ -237,7 +262,8 @@ class TencentMapCoordinateProvider:
             longitude=selected.longitude,
             latitude=selected.latitude,
             source="tencent_map_place_search",
-            message=reason,
+            message=selection.reason,
+            source_confidence=selection.source_confidence,
         )
 
 
@@ -460,25 +486,157 @@ def _parse_place_candidates(payload: Mapping[str, Any]) -> list[TencentMapPlaceC
 def _select_coordinate_candidate(
     query_name: str,
     candidates: list[TencentMapPlaceCandidate],
-) -> tuple[TencentMapPlaceCandidate | None, str]:
+) -> CoordinateCandidateSelection:
     normalized_query = _normalize_title(query_name)
     exact_matches = [
         candidate for candidate in candidates if _normalize_title(candidate.title) == normalized_query
     ]
     if len(exact_matches) == 1:
-        return exact_matches[0], "腾讯地图地点搜索返回唯一精确名称匹配。"
+        return CoordinateCandidateSelection(
+            selected=exact_matches[0],
+            reason="腾讯地图地点搜索返回唯一精确名称匹配。",
+            source_confidence="exact_unique",
+        )
     if len(exact_matches) > 1:
-        return None, "其中存在多个精确名称匹配"
+        exact_selection = _auto_select_similar_top_candidate(
+            query_name,
+            exact_matches,
+            reason_prefix="腾讯地图地点搜索返回多个精确名称匹配",
+        )
+        if exact_selection.selected is not None:
+            return exact_selection
+        return CoordinateCandidateSelection(
+            selected=None,
+            reason="其中存在多个精确名称匹配",
+            source_confidence="manual_top5_candidates",
+            review_candidates=_to_coordinate_candidates(candidates),
+        )
     if len(candidates) == 1:
-        return candidates[0], "腾讯地图地点搜索返回唯一候选地点。"
-    return None, "且没有唯一精确名称匹配"
+        return CoordinateCandidateSelection(
+            selected=candidates[0],
+            reason="腾讯地图地点搜索返回唯一候选地点。",
+            source_confidence="unique_candidate",
+        )
+
+    similar_selection = _auto_select_similar_top_candidate(
+        query_name,
+        candidates,
+        reason_prefix="腾讯地图地点搜索返回多条高度相似候选",
+    )
+    if similar_selection.selected is not None:
+        return similar_selection
+
+    return CoordinateCandidateSelection(
+        selected=None,
+        reason="且没有唯一精确名称匹配或可自动合并的高度相似候选",
+        source_confidence="manual_top5_candidates",
+        review_candidates=_to_coordinate_candidates(candidates),
+    )
 
 
 def _normalize_title(value: str) -> str:
-    return "".join(str(value).split())
+    return re.sub(r"[\s（）()\[\]【】<>《》·.,，、:：;；'\"-]+", "", str(value)).lower()
 
 
-def _coordinate_manual_review(query_name: str, message: str) -> CoordinateResolution:
+def _auto_select_similar_top_candidate(
+    query_name: str,
+    candidates: list[TencentMapPlaceCandidate],
+    *,
+    reason_prefix: str,
+) -> CoordinateCandidateSelection:
+    top_candidates = candidates[: min(AUTO_SIMILAR_TOP_COUNT, len(candidates))]
+    if len(top_candidates) < 2:
+        return CoordinateCandidateSelection(None, "候选数量不足以判断相似聚类", None)
+
+    selected = top_candidates[0]
+    if not _same_city_and_district(top_candidates):
+        return CoordinateCandidateSelection(None, "前排候选不在同一城市或行政区", None)
+    if not _all_titles_similar(query_name, selected.title, top_candidates):
+        return CoordinateCandidateSelection(None, "前排候选名称相似度不足", None)
+
+    return CoordinateCandidateSelection(
+        selected=selected,
+        reason=(
+            f"{reason_prefix}，前 {len(top_candidates)} 个候选名称、城市和行政区一致性较高，"
+            "已自动采用首位候选。"
+        ),
+        source_confidence="auto_similar_top1",
+    )
+
+
+def _same_city_and_district(candidates: list[TencentMapPlaceCandidate]) -> bool:
+    cities = {_normalize_title(candidate.city) for candidate in candidates if candidate.city}
+    districts = {
+        _normalize_title(candidate.district)
+        for candidate in candidates
+        if candidate.district
+    }
+    return len(cities) <= 1 and len(districts) <= 1
+
+
+def _all_titles_similar(
+    query_name: str,
+    selected_title: str,
+    candidates: list[TencentMapPlaceCandidate],
+) -> bool:
+    normalized_query = _normalize_title(query_name)
+    normalized_selected = _normalize_title(selected_title)
+    if not _titles_match(normalized_selected, normalized_query):
+        return False
+    for candidate in candidates:
+        normalized_title = _normalize_title(candidate.title)
+        if not _titles_match(normalized_title, normalized_selected):
+            return False
+    return True
+
+
+def _titles_match(left: str, right: str) -> bool:
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    if left in right or right in left:
+        return True
+    return _title_similarity(left, right) >= AUTO_SIMILARITY_THRESHOLD
+
+
+def _title_similarity(left: str, right: str) -> float:
+    if not left or not right:
+        return 0
+    if left == right:
+        return 1
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def _to_coordinate_candidates(
+    candidates: list[TencentMapPlaceCandidate],
+    *,
+    limit: int = MANUAL_REVIEW_CANDIDATE_LIMIT,
+) -> tuple[CoordinateCandidate, ...]:
+    return tuple(
+        CoordinateCandidate(
+            rank=index,
+            title=candidate.title,
+            address=candidate.address,
+            category=candidate.category,
+            longitude=candidate.longitude,
+            latitude=candidate.latitude,
+            province=candidate.province,
+            city=candidate.city,
+            district=candidate.district,
+            source_id=candidate.poi_id,
+        )
+        for index, candidate in enumerate(candidates[:limit], start=1)
+    )
+
+
+def _coordinate_manual_review(
+    query_name: str,
+    message: str,
+    *,
+    source_confidence: str | None = "manual_review",
+    candidates: tuple[CoordinateCandidate, ...] = (),
+) -> CoordinateResolution:
     return CoordinateResolution(
         status="manual_review",
         query_name=query_name,
@@ -488,6 +646,8 @@ def _coordinate_manual_review(query_name: str, message: str) -> CoordinateResolu
         latitude=None,
         source="tencent_map_place_search",
         message=message,
+        source_confidence=source_confidence,
+        candidates=candidates,
     )
 
 

@@ -180,3 +180,48 @@ CustomerProfile
 - 需要改变陌生集装箱汽运公式、单位或箱/柜换算口径；
 - 需要复现毕业论文算法但论文或源代码未提供；
 - 外部接口契约、权限或密钥管理方式不明确。
+
+## 已完成阶段：Tencent 地点多候选选择策略
+
+周一上班后第一项进入正式实现，不只停留在 demo：
+
+```text
+Tencent 地点搜索
+-> 0 个候选：manual_review
+-> 1 个候选：resolved
+-> 多个候选：
+   1. 先做名称归一化和相似度判断；
+   2. 若前几名都可判定为同一地点或高度相似，自动取首位，并标记 source_confidence=auto_similar_top1；
+   3. 若不是同一类相似点，则返回 top 5 候选，进入人工选择。
+```
+
+正式项目里不做 GUI 弹窗，geo 层返回结构化结果：
+
+```text
+status = manual_review
+message = 候选不唯一，请人工选择
+candidates = [
+  {rank, title, address, category, longitude, latitude, city, district}
+]
+```
+
+职责边界：
+
+- `src/geo/tencent_map_provider.py`：实现候选点归一化、相似度判断、自动首位采纳和 top 5 候选返回；
+- `src/demos/tencent_map_probe.py`：把 top 5 候选打印出来，方便本地核验；
+- 后续 CLI/前端：再承接人工选择；
+- 核心 geo/domain 层不依赖人工输入界面，只返回可追溯候选。
+
+### 完成结果
+
+- `src/geo/coordinate_provider.py` 的 `CoordinateResolution` 已支持 `source_confidence` 和结构化 `candidates`。
+- `src/geo/tencent_map_provider.py` 已实现唯一候选、相似候选自动首位采纳和 top 5 人工复核候选返回。
+- 自动首位采纳采用保守策略：首位候选必须与查询词高度相似，且前排候选之间也必须高度相似，并处于同一城市/行政区。
+- `src/demos/tencent_map_probe.py` 已打印 `source_confidence` 和人工复核候选列表，方便本地 PyCharm/API 验证。
+- 验证结果：`python -B -m src.dev.smoke_test` 通过，`245 passed`，真实数据 smoke 通过。
+
+### 仍需后续设计
+
+- 人工选择结果的保存、缓存和回写流程尚未实现。
+- 真实业务 OD 点的候选确认表结构尚未设计。
+- Codex 沙箱内腾讯地图网络请求仍返回 `ConnectionError`；用户本机 PyCharm/venv 已验证腾讯地图 Key 与公开点路线链路可用。

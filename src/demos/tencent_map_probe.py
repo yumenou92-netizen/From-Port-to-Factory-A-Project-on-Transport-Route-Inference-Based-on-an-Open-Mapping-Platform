@@ -5,6 +5,10 @@ import sys
 
 from src.dev.runtime_env import DEFAULT_ENV_FILE, load_runtime_env
 
+DEFAULT_PROBE_REGION = "北京"
+DEFAULT_PROBE_ORIGIN = "北京大学"
+DEFAULT_PROBE_DESTINATION = "北京站"
+
 try:
     from .distance_provider import RoadRouteRequest
     from .tencent_map_provider import (
@@ -34,24 +38,25 @@ def main() -> None:
     print(f"- using example template: {env_result.used_example}")
 
     try:
-        coordinate_provider = TencentMapCoordinateProvider.from_env(region="北京", page_size=20)
+        coordinate_provider = TencentMapCoordinateProvider.from_env(
+            region=os.environ.get("TENCENT_MAP_PROBE_REGION", DEFAULT_PROBE_REGION),
+            page_size=20,
+        )
         route_provider = TencentMapDrivingRouteProvider.from_env()
     except TencentMapConfigError as exc:
         print(f"Tencent Map probe skipped: {exc}")
         print(f"Set {TENCENT_MAP_API_KEY_ENV} locally before running this probe.")
         return
 
-    origin = coordinate_provider.resolve("北京大学")
-    destination = coordinate_provider.resolve("北京站")
+    origin_name = os.environ.get("TENCENT_MAP_PROBE_ORIGIN", DEFAULT_PROBE_ORIGIN)
+    destination_name = os.environ.get("TENCENT_MAP_PROBE_DESTINATION", DEFAULT_PROBE_DESTINATION)
+    origin = coordinate_provider.resolve(origin_name)
+    destination = coordinate_provider.resolve(destination_name)
 
     print("Tencent Map coordinate probe")
-    print(f"- origin status: {origin.status}, source: {origin.source}, name: {origin.canonical_name}")
-    print(f"- origin message: {origin.message}")
-    print(
-        f"- destination status: {destination.status}, "
-        f"source: {destination.source}, name: {destination.canonical_name}"
-    )
-    print(f"- destination message: {destination.message}")
+    print(f"- region: {os.environ.get('TENCENT_MAP_PROBE_REGION', DEFAULT_PROBE_REGION)}")
+    _print_coordinate_result("origin", origin)
+    _print_coordinate_result("destination", destination)
 
     if not origin.is_resolved or not destination.is_resolved:
         print("Tencent Map route probe skipped: coordinate probe did not produce two unique points.")
@@ -79,6 +84,24 @@ def _sync_pythonpath_to_sys_path() -> None:
     for path_text in reversed(os.environ.get("PYTHONPATH", "").split(os.pathsep)):
         if path_text and path_text not in sys.path:
             sys.path.insert(0, path_text)
+
+
+def _print_coordinate_result(label: str, result) -> None:
+    print(f"- {label} status: {result.status}, source: {result.source}, name: {result.canonical_name}")
+    print(f"- {label} confidence: {result.source_confidence or 'none'}")
+    print(f"- {label} message: {result.message}")
+    if not result.candidates:
+        return
+
+    print(f"- {label} manual review candidates:")
+    for candidate in result.candidates:
+        location = f"{candidate.latitude},{candidate.longitude}"
+        area_parts = [value for value in (candidate.city, candidate.district) if value]
+        area = "/".join(area_parts) if area_parts else "unknown area"
+        print(
+            f"  {candidate.rank}. {candidate.title} | {candidate.address or 'no address'} | "
+            f"{candidate.category or 'no category'} | {area} | {location}"
+        )
 
 
 if __name__ == "__main__":

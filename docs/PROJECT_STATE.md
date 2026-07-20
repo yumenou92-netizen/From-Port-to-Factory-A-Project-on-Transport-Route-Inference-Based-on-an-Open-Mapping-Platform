@@ -512,3 +512,116 @@ main...origin/main [ahead 2 after current local commit]
 - 把真实业务数据、API Key、真实输出或未脱敏材料提交到 GitHub；
 - 在未取得论文或源代码时猜测并复现用户毕业论文算法；
 - 把领导汇报材料当作真实工程完成状态。
+
+## 14. 2026-07-17 下班状态
+
+### 今日最终 Git 状态
+
+- 已完成 GitHub 推送，当前 `main...origin/main` 同步。
+- 最新远程提交：`5ef0beb chore(dev): add developer demo and map probe diagnostics`。
+- 推送前已处理远程 `7b8c5b5 Update README.md` 分叉，并保留远程 README 文字与本地开发者入口说明。
+- 当前仍存在未跟踪本地材料：`.pytest_tmp/`、若干 Office/PDF/PNG/历史工作报告和 `docs/2026-07-16_DEVELOPMENT_LOG.md`。这些文件未提交，默认不得批量加入 Git。
+
+### 今日最终验证
+
+Codex 环境下已运行：
+
+```powershell
+python -B -m src.dev.smoke_test
+```
+
+结果：
+
+```text
+243 passed in 0.79s
+real-data smoke: passed
+Tencent probe: passed as diagnostic entry
+```
+
+说明：
+
+- Codex 当前运行环境访问腾讯地图仍返回 `ConnectionError`；
+- 用户在本机 PyCharm/venv 中已验证腾讯地图公开点探针成功：
+  - 北京大学 -> 北京站；
+  - `distance_km=21.48`；
+  - `duration_hours=1.4`；
+  - `toll_yuan=0`；
+  - `tags=大众常走`。
+- 因此腾讯地图 WebService Key 和普通驾车距离链路已在用户本机验证可用；Codex 环境失败属于运行环境网络差异。
+
+### 周一首项任务
+
+正式实现 geo 层 Tencent 地点多候选选择策略：
+
+```text
+Tencent 地点搜索
+-> 0 个候选：manual_review
+-> 1 个候选：resolved
+-> 多个候选：
+   1. 先做名称归一化和相似度判断；
+   2. 若前几名都可判定为同一地点或高度相似，自动取首位，并标记 source_confidence=auto_similar_top1；
+   3. 若不是同一类相似点，则返回 top 5 候选，进入人工选择。
+```
+
+正式项目中不做 GUI 弹窗，由 geo 层返回结构化候选：
+
+```text
+status = manual_review
+message = 候选不唯一，请人工选择
+candidates = [
+  {rank, title, address, category, longitude, latitude, city, district}
+]
+```
+
+职责边界：
+
+- `src/geo/tencent_map_provider.py`：实现候选点归一化、相似度判断、自动首位采纳和 top 5 候选返回；
+- `src/demos/tencent_map_probe.py`：打印 top 5 候选，方便本地核验；
+- 后续 CLI/前端：承接人工选择；
+- 核心 geo/domain 层不依赖人工输入界面，只返回可追溯候选。
+
+### 今日未完成但已标注事项
+
+- 项目级 `pytest.ini --basetemp` 配置今天继续暂缓；当前 `src.dev.smoke_test` 已在自身范围内使用 `local_env/.tmp/pytest` 规避 Windows 默认临时目录权限问题。
+- 地图新坐标和路线结果尚未设计缓存、人工确认后回写和真实业务 OD 点候选保存流程。
+- 真实业务搜索仍需补客户自有码头字段、北港至南港数据、正式运输时间来源和 AdditionalFee 归属。
+
+## 15. 2026-07-17 续做状态：Tencent 地点多候选选择策略已接入
+
+### 已完成
+
+- `src/geo/coordinate_provider.py` 新增结构化候选点模型，并让 `CoordinateResolution` 携带 `source_confidence` 与 `candidates`。
+- `src/geo/tencent_map_provider.py` 已把 Tencent 地点搜索多候选策略接入正式 geo Provider：
+  - 0 个候选：`manual_review`；
+  - 1 个候选：`resolved`；
+  - 多个候选：先做名称归一化、查询词相似度、前排候选相似度和城市/行政区一致性判断；
+  - 高置信相似候选自动取首位，并标记 `source_confidence=auto_similar_top1`；
+  - 非高置信候选返回 top 5 结构化候选，交给人工复核。
+- `src/demos/tencent_map_probe.py` 已打印 `source_confidence` 与人工复核候选 rank/title/address/category/area/coordinates。
+- 新增回归测试覆盖唯一精确命中、相似候选自动首位采纳、非相似候选 top 5 人工复核和原有 API 错误脱敏。
+
+### 当前验证
+
+```powershell
+python -B -m src.dev.smoke_test
+```
+
+结果：
+
+```text
+245 passed
+real-data smoke: passed
+Tencent probe: passed as diagnostic entry
+```
+
+说明：
+
+- Codex 沙箱内腾讯地图请求仍返回 `ConnectionError`，但该探针作为诊断入口退出码为 0；
+- 用户本机 PyCharm/venv 已验证腾讯地图 Key 与公开点路线链路可用；
+- 这次正式实现没有引入 GUI 弹窗，人工选择仍以后续 CLI/前端或候选确认表承接。
+
+### 仍需确认或后续实现
+
+- 人工选择后的坐标保存、缓存、回写和复用流程尚未设计。
+- 真实业务 OD 点候选确认表结构尚未设计。
+- 当前自动首位采纳策略偏保守：首位候选必须与查询词高度相似，且前排候选之间高度相似，并处于同一城市/行政区。若后续发现过多进入人工复核，可再由用户确认后放宽阈值或规则。
