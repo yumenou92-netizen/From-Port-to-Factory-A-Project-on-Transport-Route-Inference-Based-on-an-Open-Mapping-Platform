@@ -118,9 +118,11 @@ python -B -m src.demos.node_coordinate_backfill
 python -B -m src.demos.node_coordinate_backfill --query-tencent --region "全国"
 ```
 
-The list is written to `output/node_coordinate_backfill_review.jsonl`. A local
-`名称字典.xlsx` contributes an alias only when one row has both a full and short
-name and one side is already a registered coordinate node. It never supplies a
-missing coordinate or automatically merges two existing nodes. After human
-review, approved coordinates can be written to the local `地点经纬度.json` under
-the separate data-governance process.
+The list is written to `output/node_coordinate_backfill_review.jsonl`. Each row
+keeps the raw business name as the first Tencent query and, when the local
+`名称字典.xlsx` has an explicit full-name/short-name pair, adds the full name as a
+parallel query for human comparison. The JSONL fields `query_names` and
+`coordinate_resolutions` preserve every query result and its candidate trace.
+The dictionary never supplies a missing coordinate or automatically merges two
+existing nodes. After human review, approved coordinates can be written to the
+local `地点经纬度.json` under the separate data-governance process.

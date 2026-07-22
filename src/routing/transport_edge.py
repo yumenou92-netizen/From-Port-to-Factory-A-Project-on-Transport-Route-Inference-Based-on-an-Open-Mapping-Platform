@@ -10,10 +10,26 @@ try:
     from .cost_rules import CostCalculationResult
     from .freight_rate import FreightRate
     from .shipping_time_provider import ShippingTimeResult
+    from .transport_contracts import (
+        CostComponent,
+        CostComposition,
+        ManualReviewOutcome,
+        TimeScope,
+        TransportStage,
+        validate_stage_time_scope,
+    )
 except ImportError:  # Support direct script-style imports used by demo scripts.
     from src.domain.cost_rules import CostCalculationResult
     from src.domain.freight_rate import FreightRate
     from src.routing.shipping_time_provider import ShippingTimeResult
+    from src.routing.transport_contracts import (
+        CostComponent,
+        CostComposition,
+        ManualReviewOutcome,
+        TimeScope,
+        TransportStage,
+        validate_stage_time_scope,
+    )
 
 
 TransportEdgeStatus = Literal["available", "not_applicable", "manual_review"]
@@ -46,6 +62,10 @@ class TransportEdge:
     calculation_detail: str | None
     data_source: str
     unavailable_reason: str | None = None
+    transport_stage: TransportStage | None = None
+    time_scope: TimeScope | None = None
+    cost_components: tuple[CostComponent, ...] = ()
+    manual_review_outcomes: tuple[ManualReviewOutcome, ...] = ()
 
     def __post_init__(self) -> None:
         if self.status not in {"available", "not_applicable", "manual_review"}:
@@ -66,6 +86,14 @@ class TransportEdge:
         object.__setattr__(self, "calculation_detail", _optional_text(self.calculation_detail))
         object.__setattr__(self, "data_source", _required_text(self.data_source, "运输边数据来源"))
         object.__setattr__(self, "unavailable_reason", _optional_text(self.unavailable_reason))
+        object.__setattr__(self, "transport_stage", _optional_text(self.transport_stage))
+        object.__setattr__(self, "time_scope", _optional_text(self.time_scope))
+        object.__setattr__(self, "cost_components", tuple(self.cost_components))
+        object.__setattr__(self, "manual_review_outcomes", tuple(self.manual_review_outcomes))
+        try:
+            validate_stage_time_scope(self.transport_stage, self.time_scope)
+        except ValueError as exc:
+            raise TransportEdgeError(str(exc)) from None
 
         cost = _optional_positive_decimal(self.cost_yuan, "运输段总费用")
         time = _optional_positive_decimal(self.time_hours, "运输时间")
@@ -102,6 +130,13 @@ class TransportEdge:
                 raise TransportEdgeError("可用运输边的原始价格必须大于 0。")
             if self.unavailable_reason is not None:
                 raise TransportEdgeError("可用运输边不得包含不可用原因。")
+            if self.manual_review_outcomes:
+                raise TransportEdgeError("可用运输边不得包含人工复核结果。")
+            if self.cost_components:
+                try:
+                    CostComposition(self.cost_components).validate_total(cost)
+                except ValueError as exc:
+                    raise TransportEdgeError(str(exc)) from None
         elif self.unavailable_reason is None:
             raise TransportEdgeError("不可用运输边必须说明原因。")
 
@@ -146,6 +181,9 @@ class TransportEdge:
             "cost_rule_version": self.cost_rule_version,
             "calculation_detail": self.calculation_detail,
             "data_source": self.data_source,
+            "transport_stage": self.transport_stage,
+            "time_scope": self.time_scope,
+            "cost_components": self.cost_components,
         }
 
 
@@ -158,6 +196,9 @@ def build_transport_edge(
     distance_km: object | None = None,
     distance_source: str | None = None,
     data_source: str | None = None,
+    transport_stage: TransportStage | None = None,
+    cost_components: tuple[CostComponent, ...] = (),
+    manual_review_outcomes: tuple[ManualReviewOutcome, ...] = (),
 ) -> TransportEdge:
     """Combine one rate, cost result, and time result into a traceable edge."""
     normalized_commodity = _required_text(commodity, "货物品种")
@@ -167,6 +208,9 @@ def build_transport_edge(
 
     review_reasons: list[str] = []
     not_applicable_reasons: list[str] = []
+
+    for outcome in manual_review_outcomes:
+        review_reasons.append(f"[{outcome.reason_code}] {outcome.details}（{outcome.source_ref}）")
 
     if rate.from_node_id is None:
         review_reasons.append("缺少起点节点 ID。")
@@ -241,6 +285,29 @@ def build_transport_edge(
         distance_km=normalized_distance,
         distance_source=normalized_distance_source,
         data_source=source,
+        transport_stage=transport_stage,
+        time_scope=time_result.time_scope,
+        cost_components=tuple(
+            (
+                item.component_type,
+                item.amount_yuan,
+                item.source_type,
+                item.source,
+                item.rule_id,
+                item.rule_version,
+                item.calculation_detail,
+            )
+            for item in cost_components
+        ),
+        manual_review_outcomes=tuple(
+            (
+                item.reason_code,
+                item.source_ref,
+                item.details,
+                item.owner_unit,
+            )
+            for item in manual_review_outcomes
+        ),
     )
     return TransportEdge(
         edge_id=edge_id,
@@ -264,6 +331,10 @@ def build_transport_edge(
         calculation_detail=cost_result.calculation_detail,
         data_source=source,
         unavailable_reason=unavailable_reason,
+        transport_stage=transport_stage,
+        time_scope=time_result.time_scope,
+        cost_components=cost_components,
+        manual_review_outcomes=manual_review_outcomes,
     )
 
 

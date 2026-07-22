@@ -38,7 +38,7 @@ def main() -> None:
         provider = TencentMapCoordinateProvider.from_env(region=args.region, page_size=5)
         reviews = query_coordinate_candidates(locations, provider)
     else:
-        reviews = tuple(CoordinateBackfillReview(location, None) for location in locations)
+        reviews = tuple(CoordinateBackfillReview(location, ()) for location in locations)
 
     output_path = Path(args.output) if args.output else _default_output_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)

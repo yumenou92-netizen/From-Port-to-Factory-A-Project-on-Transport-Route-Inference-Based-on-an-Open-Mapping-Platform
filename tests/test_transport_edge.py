@@ -7,6 +7,7 @@ from src.domain.cost_rules import CostCalculationResult
 from src.domain.freight_rate import create_freight_rate
 from src.routing.shipping_time_provider import ShippingTimeResult
 from src.routing.transport_edge import TransportEdgeError, build_transport_edge
+from src.routing.transport_contracts import CostComponent, ManualReviewOutcome
 
 
 def make_rate(**overrides):
@@ -105,6 +106,94 @@ def test_available_edge_exports_graph_attributes_with_independent_weights():
     assert "weight" not in attributes
     assert attributes["price_source"] == "演示熟悉路线台账"
     assert attributes["time_source"] == "manual_shipping_time"
+
+
+def test_edge_preserves_stage_time_scope_and_validated_cost_components():
+    component = CostComponent(
+        component_type="road_freight",
+        amount_yuan="10000",
+        source_type="confirmed_rule",
+        source="sanitized_rates.json#row=8",
+        rule_id="known_truck_maintained_rate",
+        rule_version="1.0",
+        calculation_detail="20元/吨 × 500吨 = 10000元",
+    )
+    edge = build_transport_edge(
+        make_rate(),
+        make_cost_result(),
+        make_time_result(time_scope="road_driving"),
+        commodity="玉米",
+        transport_stage="road_last_mile",
+        cost_components=(component,),
+    )
+
+    attributes = edge.to_graph_attributes()
+
+    assert edge.transport_stage == "road_last_mile"
+    assert edge.time_scope == "road_driving"
+    assert attributes["cost_components"] == (component,)
+
+
+def test_edge_rejects_cost_component_total_mismatch():
+    component = CostComponent(
+        component_type="road_freight",
+        amount_yuan="9999",
+        source_type="confirmed_rule",
+        source="sanitized_rates.json#row=8",
+        rule_id="known_truck_maintained_rate",
+        rule_version="1.0",
+        calculation_detail="错误合成测试金额",
+    )
+
+    with pytest.raises(TransportEdgeError, match="不一致"):
+        build_transport_edge(
+            make_rate(),
+            make_cost_result(),
+            make_time_result(),
+            commodity="玉米",
+            cost_components=(component,),
+        )
+
+
+def test_manual_review_outcome_makes_edge_unavailable_with_trace():
+    outcome = ManualReviewOutcome(
+        status="manual_review",
+        reason_code="RATE_UNIT_UNCONFIRMED",
+        source_ref="sanitized_rates.json#row=8",
+        details="价格单位尚未确认。",
+        owner_unit="W2",
+    )
+
+    edge = build_transport_edge(
+        make_rate(),
+        make_cost_result(),
+        make_time_result(),
+        commodity="玉米",
+        manual_review_outcomes=(outcome,),
+    )
+
+    assert edge.status == "manual_review"
+    assert edge.manual_review_outcomes == (outcome,)
+    assert "RATE_UNIT_UNCONFIRMED" in edge.unavailable_reason
+    assert "价格单位尚未确认" in edge.unavailable_reason
+
+
+@pytest.mark.parametrize(
+    ("stage", "scope", "message"),
+    [
+        ("unknown_stage", "complete_segment", "不支持的运输阶段"),
+        ("bulk_shipping_trunk", "road_driving", "不允许使用时间范围"),
+    ],
+)
+def test_edge_rejects_invalid_stage_time_scope_contract(stage, scope, message):
+    with pytest.raises(TransportEdgeError, match=message):
+        build_transport_edge(
+            make_rate(),
+            make_cost_result(),
+            make_time_result(time_scope=scope),
+            commodity="玉米",
+            transport_stage=stage,
+        )
 
 
 def test_missing_node_ids_make_edge_unavailable_without_fabricated_nodes():
@@ -257,3 +346,43 @@ def test_edge_id_is_stable_and_distinguishes_parallel_sources():
 
     assert first.edge_id == same.edge_id
     assert first.edge_id != alternative.edge_id
+
+
+def test_edge_id_distinguishes_stage_time_scope_and_cost_component_trace():
+    base = build_transport_edge(
+        make_rate(),
+        make_cost_result(),
+        make_time_result(),
+        commodity="玉米",
+    )
+    staged = build_transport_edge(
+        make_rate(),
+        make_cost_result(),
+        make_time_result(),
+        commodity="玉米",
+        transport_stage="road_last_mile",
+    )
+    scoped = build_transport_edge(
+        make_rate(),
+        make_cost_result(),
+        make_time_result(time_scope="road_driving"),
+        commodity="玉米",
+    )
+    component = CostComponent(
+        component_type="road_freight",
+        amount_yuan="10000",
+        source_type="confirmed_rule",
+        source="sanitized_component_source",
+        rule_id="known_truck_maintained_rate",
+        rule_version="1.0",
+        calculation_detail="合成费用组成追溯",
+    )
+    composed = build_transport_edge(
+        make_rate(),
+        make_cost_result(),
+        make_time_result(),
+        commodity="玉米",
+        cost_components=(component,),
+    )
+
+    assert len({base.edge_id, staged.edge_id, scoped.edge_id, composed.edge_id}) == 4

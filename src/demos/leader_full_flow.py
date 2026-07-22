@@ -4,7 +4,7 @@ import argparse
 import math
 import sys
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Callable, Sequence
 
 from src.data.loaders import (
@@ -347,7 +347,7 @@ def _build_demo_trunk_edge(
     edge_id = make_transport_edge_id(
         from_node_id=origin_node_id,
         to_node_id=port.node_id,
-        transport_mode="水运",
+        transport_mode="散船",
         package_type=request.package_type,
         commodity=request.commodity,
         cost_yuan=total_cost,
@@ -359,7 +359,7 @@ def _build_demo_trunk_edge(
         status="available",
         from_node_id=origin_node_id,
         to_node_id=port.node_id,
-        transport_mode="水运",
+        transport_mode="散船",
         package_type=request.package_type,
         commodity=request.commodity,
         cost_yuan=total_cost,
@@ -473,8 +473,29 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
         f"客户工厂={result.destination_resolution.source_confidence or '未提供'}"
     )
     print(
-        f"候选南港={len(result.candidate_ports)} 个；正式图运输边={result.graph_edge_count} 条；"
-        f"已加载 AdditionalFee={result.additional_fee_count} 条（归属未确认，本次不计入）"
+        f"地点节点：北港={_node_registration_text(result.origin_resolution)}；"
+        f"客户工厂={_node_registration_text(result.destination_resolution)}"
+    )
+    candidate_count = len(result.candidate_ports)
+    print(
+        f"候选南港={candidate_count} 个；本次搜索图运输边={result.graph_edge_count} 条"
+        f"（散船干线占位边={candidate_count} 条；南港至客户汽运边={candidate_count} 条）"
+    )
+    print(
+        f"AdditionalFee 原始记录={result.additional_fee_count} 条"
+        "（仅完成结构化加载，未计入本次总费用；缺失不代表费用为 0）"
+    )
+    print("候选南港（本次均已形成可搜索的南港至客户汽运段）：")
+    for index, port in enumerate(result.candidate_ports, start=1):
+        print(
+            f"  {index}. {port.name}；"
+            f"预筛直线距离={_format_decimal(port.straight_line_km_to_factory)}公里"
+        )
+    print(
+        "候选预筛口径（当前原型启发式）：候选来源于可用汽运运价始发端；"
+        "港/码头名称候选达到展示下限时优先保留，否则回退全部；"
+        "已维护到厂汽运路线优先，同优先级按直线距离排序；"
+        "最终汽运距离和时间使用腾讯道路结果，费用优先采用已维护运价，否则采用已确认陌生汽运规则。"
     )
 
     print("\n一、费用最低路线")
@@ -486,12 +507,15 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
         result.recommendations.lowest_cost.path_node_ids
         == result.recommendations.fastest_time.path_node_ids
     ):
-        print("\n说明：本次费用最低和时间最短指向同一条物理路线，系统按真实搜索结果展示。")
+        print(
+            "\n说明：在本次候选范围和当前散船干线占位参数下，"
+            "费用最低与时间最短指向同一条物理路线；两项目标仍由系统独立搜索。"
+        )
 
-    print("\n三、关于测试版的说明 about Test Version.7_24")
-    print("- Data_REAL First 真实优先：本地节点、真实维护运价、腾讯地图距离与驾车时间、已确认计费规则。")
-    print("- Smooth present First 演示占位：仅北港至候选南港的船运费用、船运时间，以及无自有码头画像。")
-    print("- Not yet completed 暂不计入：AdditionalFee；未确认归属前不默认为 0，也不伪造归属。")
+    print("\n三、测试版数据边界说明")
+    print("- 真实输入与规则：本地标准节点和已维护汽运价可用时优先采用；道路距离和驾车时间来自腾讯地图；陌生汽运使用已确认规则。")
+    print("- 演示占位数据：仅北港至候选南港的散船干线费用、纯航行时间，以及客户无自有码头画像。")
+    print("- 暂未计入：AdditionalFee 仅完成原始记录加载；逐条适用条件未确认前不计入，也不解释为 0。")
     for warning in result.warnings:
         print(f"- 运行提示：{warning}")
 
@@ -499,18 +523,42 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
 def _print_route(route: RouteResult, result: FullFlowDemoResult) -> None:
     names = [result.node_names.get(node_id, node_id) for node_id in route.path_node_ids]
     print(f"推荐路径：{' -> '.join(names)}")
-    print(f"总费用：{route.total_cost_yuan} 元；总时间：{route.total_time_hours} 小时")
+    print(
+        f"总费用：{_format_decimal(route.total_cost_yuan)} 元；"
+        f"总时间：{_format_decimal(route.total_time_hours)} 小时"
+    )
+    _print_cost_breakdown(route, result)
     for segment in route.segments:
         source = result.edge_sources[segment.edge_key]
         labels = "、".join(_source_label_text(label) for label in source.labels)
         start = result.node_names.get(segment.from_node_id, segment.from_node_id)
         end = result.node_names.get(segment.to_node_id, segment.to_node_id)
         print(
-            f"  {segment.segment_no}. {start} -> {end}；方式={segment.transport_mode}；"
-            f"费用={segment.cost_yuan}元；时间={segment.time_hours}小时"
+            f"  {segment.segment_no}. {start} -> {end}；方式={_transport_mode_text(segment.transport_mode)}；"
+            f"费用={_format_decimal(segment.cost_yuan)}元；"
+            f"时间={_format_decimal(segment.time_hours)}小时"
         )
         print(f"     数据口径={labels}；{source.explanation}")
         print(f"     计费规则={segment.cost_rule_id}/{segment.cost_rule_version}")
+
+
+def _print_cost_breakdown(route: RouteResult, result: FullFlowDemoResult) -> None:
+    print("总费用组成（已计入）：")
+    for segment in route.segments:
+        source = result.edge_sources[segment.edge_key]
+        labels = "、".join(_source_label_text(label) for label in source.labels)
+        start = result.node_names.get(segment.from_node_id, segment.from_node_id)
+        end = result.node_names.get(segment.to_node_id, segment.to_node_id)
+        print(
+            f"  {segment.segment_no}. {_transport_mode_text(segment.transport_mode)}："
+            f"{start} -> {end}；{_format_decimal(segment.cost_yuan)}元；"
+            f"数据口径={labels}；计费规则={segment.cost_rule_id}/{segment.cost_rule_version}"
+        )
+    print(f"  已计入合计：{_format_decimal(route.total_cost_yuan)}元")
+    if result.additional_fee_count:
+        print("  未计入项：AdditionalFee（原始记录已加载，逐条适用条件未确认）")
+    else:
+        print("  未计入项：AdditionalFee（当前无原始记录；缺失不解释为 0）")
 
 
 def _source_label_text(label: str) -> str:
@@ -520,6 +568,28 @@ def _source_label_text(label: str) -> str:
         SOURCE_CONFIRMED_RULE: "已确认计费规则",
         SOURCE_DEMO_PLACEHOLDER: "演示占位数据",
     }[label]
+
+
+def _node_registration_text(result: CoordinateResolution) -> str:
+    if result.node_id is not None:
+        return "已注册标准节点"
+    if result.source == "tencent_map_place_search":
+        return "腾讯坐标生成的本次运行临时节点（可参与构图）"
+    return "坐标解析生成的本次运行临时节点（可参与构图）"
+
+
+def _transport_mode_text(transport_mode: str) -> str:
+    if transport_mode == "散船":
+        return "散船干线"
+    return transport_mode
+
+
+def _format_decimal(value: Decimal, *, places: int = 2) -> str:
+    quantum = Decimal("1").scaleb(-places)
+    formatted = format(value.quantize(quantum, rounding=ROUND_HALF_UP), "f")
+    if "." not in formatted:
+        return formatted
+    return formatted.rstrip("0").rstrip(".")
 
 
 def _real_rate_source(rate: FreightRate) -> str:

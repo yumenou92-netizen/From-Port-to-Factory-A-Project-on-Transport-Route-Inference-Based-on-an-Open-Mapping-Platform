@@ -14,7 +14,7 @@ class MissingNodeLocation:
     """One raw location requiring coordinate registration or alias review."""
 
     raw_name: str
-    query_name: str
+    query_names: tuple[str, ...]
     node_types: tuple[str, ...]
     missing_sides: tuple[str, ...]
     candidate_count: int
@@ -27,7 +27,7 @@ class MissingNodeLocation:
 @dataclass(frozen=True)
 class CoordinateBackfillReview:
     location: MissingNodeLocation
-    resolution: CoordinateResolution | None
+    resolutions: tuple[CoordinateResolution, ...]
 
 
 def collect_missing_node_locations(
@@ -36,8 +36,8 @@ def collect_missing_node_locations(
 ) -> tuple[MissingNodeLocation, ...]:
     """Deduplicate unresolved candidate endpoints without changing business data.
 
-    A complete dictionary pair may provide a better Tencent query name, but it
-    never proves an alias or creates a node. Those decisions remain review-only.
+    A complete dictionary pair may provide additional Tencent query names, but
+    it never proves an alias or creates a node. Those decisions remain review-only.
     """
     dictionary_by_name = _dictionary_entries_by_name(dictionary_entries)
     aggregates: dict[str, dict[str, set[str] | int]] = defaultdict(
@@ -57,12 +57,12 @@ def collect_missing_node_locations(
     for raw_name, aggregate in aggregates.items():
         entries = dictionary_by_name.get(raw_name, ())
         explicit_entries = tuple(entry for entry in entries if entry.has_explicit_alias_mapping)
-        query_name = _preferred_query_name(raw_name, explicit_entries)
+        query_names = _coordinate_query_names(raw_name, explicit_entries)
         dictionary_status = _dictionary_status(entries, explicit_entries)
         locations.append(
             MissingNodeLocation(
                 raw_name=raw_name,
-                query_name=query_name,
+                query_names=query_names,
                 node_types=tuple(sorted({entry.node_type for entry in entries})),
                 missing_sides=tuple(sorted(aggregate["missing_sides"])),
                 candidate_count=len(aggregate["rate_ids"]),
@@ -81,17 +81,19 @@ def query_coordinate_candidates(
 ) -> tuple[CoordinateBackfillReview, ...]:
     """Fetch candidate coordinates only; never write the coordinate registry."""
     return tuple(
-        CoordinateBackfillReview(location=location, resolution=provider.resolve(location.query_name))
+        CoordinateBackfillReview(
+            location=location,
+            resolutions=tuple(provider.resolve(query_name) for query_name in location.query_names),
+        )
         for location in locations
     )
 
 
 def backfill_review_to_row(review: CoordinateBackfillReview) -> dict[str, object]:
     location = review.location
-    resolution = review.resolution
     return {
         "raw_name": location.raw_name,
-        "query_name": location.query_name,
+        "query_names": list(location.query_names),
         "node_types": list(location.node_types),
         "missing_sides": list(location.missing_sides),
         "candidate_count": location.candidate_count,
@@ -99,33 +101,34 @@ def backfill_review_to_row(review: CoordinateBackfillReview) -> dict[str, object
         "sample_rate_ids": list(location.sample_rate_ids),
         "dictionary_status": location.dictionary_status,
         "dictionary_rows": list(location.dictionary_rows),
-        "coordinate_resolution": None
-        if resolution is None
-        else {
-            "status": resolution.status,
-            "query_name": resolution.query_name,
-            "canonical_name": resolution.canonical_name,
-            "longitude": resolution.longitude,
-            "latitude": resolution.latitude,
-            "source": resolution.source,
-            "source_confidence": resolution.source_confidence,
-            "message": resolution.message,
-            "candidates": [
-                {
-                    "rank": candidate.rank,
-                    "title": candidate.title,
-                    "address": candidate.address,
-                    "category": candidate.category,
-                    "longitude": candidate.longitude,
-                    "latitude": candidate.latitude,
-                    "province": candidate.province,
-                    "city": candidate.city,
-                    "district": candidate.district,
-                    "source_id": candidate.source_id,
-                }
-                for candidate in resolution.candidates
-            ],
-        },
+        "coordinate_resolutions": [
+            {
+                "status": resolution.status,
+                "query_name": resolution.query_name,
+                "canonical_name": resolution.canonical_name,
+                "longitude": resolution.longitude,
+                "latitude": resolution.latitude,
+                "source": resolution.source,
+                "source_confidence": resolution.source_confidence,
+                "message": resolution.message,
+                "candidates": [
+                    {
+                        "rank": candidate.rank,
+                        "title": candidate.title,
+                        "address": candidate.address,
+                        "category": candidate.category,
+                        "longitude": candidate.longitude,
+                        "latitude": candidate.latitude,
+                        "province": candidate.province,
+                        "city": candidate.city,
+                        "district": candidate.district,
+                        "source_id": candidate.source_id,
+                    }
+                    for candidate in resolution.candidates
+                ],
+            }
+            for resolution in review.resolutions
+        ],
         "review_action": "人工确认后再写入地点经纬度.json；本清单不自动注册节点或别名。",
     }
 
@@ -153,13 +156,18 @@ def _dictionary_entries_by_name(
     return {name: tuple(values) for name, values in index.items()}
 
 
-def _preferred_query_name(raw_name: str, entries: tuple[NameDictionaryEntry, ...]) -> str:
-    full_names = {
-        entry.full_name
-        for entry in entries
-        if entry.short_name == raw_name and entry.full_name
-    }
-    return next(iter(full_names)) if len(full_names) == 1 else raw_name
+def _coordinate_query_names(
+    raw_name: str,
+    entries: tuple[NameDictionaryEntry, ...],
+) -> tuple[str, ...]:
+    full_names = sorted(
+        {
+            entry.full_name
+            for entry in entries
+            if entry.short_name == raw_name and entry.full_name
+        }
+    )
+    return tuple(dict.fromkeys((raw_name, *full_names)))
 
 
 def _dictionary_status(

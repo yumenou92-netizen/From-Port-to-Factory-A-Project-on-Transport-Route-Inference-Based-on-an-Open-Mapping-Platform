@@ -71,10 +71,41 @@ def test_tencent_coordinate_provider_resolves_unique_exact_candidate():
     assert result.latitude == 23.1
     assert result.source == "tencent_map_place_search"
     assert result.source_confidence == "exact_unique"
-    assert result.candidates == ()
+    assert len(result.candidates) == 1
+    assert result.candidates[0].address == "测试地址"
+    assert result.candidates[0].category == "公司企业"
+    assert result.candidates[0].source_id == "poi-1"
     assert seen["keyword"] == "客户A"
     assert seen["boundary"] == "region(广州,0)"
     assert seen["key"] == "fake-secret"
+
+
+def test_tencent_coordinate_provider_keeps_trace_for_single_nonexact_candidate():
+    def fake_get_json(url, params, timeout_seconds):
+        return {
+            "status": 0,
+            "message": "query ok",
+            "data": [
+                _place_candidate(
+                    "测试西港码头",
+                    poi_id="poi-west",
+                    address="测试港区一号路",
+                    category="交通设施:港口码头",
+                )
+            ],
+        }
+
+    client = TencentMapClient("fake-secret", get_json=fake_get_json)
+    provider = TencentMapCoordinateProvider(client, region="测试市")
+
+    result = provider.resolve("测试西港")
+
+    assert result.is_resolved
+    assert result.source_confidence == "unique_candidate"
+    assert len(result.candidates) == 1
+    assert result.candidates[0].address == "测试港区一号路"
+    assert result.candidates[0].category == "交通设施:港口码头"
+    assert result.candidates[0].source_id == "poi-west"
 
 
 def test_tencent_coordinate_provider_keeps_ambiguous_candidates_for_manual_review():

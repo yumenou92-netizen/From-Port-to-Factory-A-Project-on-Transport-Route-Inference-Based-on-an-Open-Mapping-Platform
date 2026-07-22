@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+
 from src.routing.shipping_time_provider import (
     ApiShippingTimeProvider,
     DatabaseShippingTimeProvider,
@@ -31,6 +33,7 @@ def test_manual_shipping_time_provider_resolves_positive_hours():
     assert result.duration_hours == Decimal("36.5")
     assert result.source == "manual_shipping_time"
     assert "人工" in result.message
+    assert result.time_scope is None
 
 
 def test_manual_shipping_time_provider_converts_days_to_hours():
@@ -41,6 +44,23 @@ def test_manual_shipping_time_provider_converts_days_to_hours():
     assert result.status == "resolved"
     assert result.duration_hours == Decimal("48")
     assert result.input_unit == "天"
+
+
+def test_shipping_time_result_preserves_pure_sailing_scope():
+    provider = ManualShippingTimeProvider()
+    request = ShippingTimeRequest(
+        stage="北港至南港",
+        transport_mode="散船",
+        duration_value="4",
+        duration_unit="天",
+        source="区域纯航行时效测试",
+        time_scope="pure_sailing",
+    )
+
+    result = provider.get_shipping_time(request)
+
+    assert result.duration_hours == Decimal("96")
+    assert result.time_scope == "pure_sailing"
 
 
 def test_manual_shipping_time_provider_converts_minutes_to_hours():
@@ -86,7 +106,13 @@ def test_manual_shipping_time_provider_rejects_unsupported_unit():
 
 
 def test_placeholder_providers_return_unconfigured_manual_review():
-    request = make_request("12")
+    request = ShippingTimeRequest(
+        stage="北港至南港",
+        transport_mode="散船",
+        duration_value="12",
+        source="测试",
+        time_scope="pure_sailing",
+    )
 
     for provider in (
         JsonShippingTimeProvider(),
@@ -98,6 +124,42 @@ def test_placeholder_providers_return_unconfigured_manual_review():
         assert result.status == "manual_review"
         assert result.duration_hours is None
         assert "尚未配置" in result.message
+        assert result.time_scope == "pure_sailing"
+
+
+def test_manual_review_preserves_explicit_time_scope():
+    request = ShippingTimeRequest(
+        stage="北港至南港",
+        transport_mode="散船",
+        duration_value=None,
+        source="测试",
+        time_scope="pure_sailing",
+    )
+
+    result = ManualShippingTimeProvider().get_shipping_time(request)
+
+    assert result.status == "manual_review"
+    assert result.time_scope == "pure_sailing"
+
+
+def test_request_and_result_reject_unsupported_time_scope():
+    with pytest.raises(ShippingTimeProviderError, match="不支持的运输时间范围"):
+        ShippingTimeRequest(
+            stage="北港至南港",
+            transport_mode="散船",
+            duration_value="4",
+            source="测试",
+            time_scope="unknown_scope",
+        )
+
+    with pytest.raises(ShippingTimeProviderError, match="不支持的运输时间范围"):
+        ShippingTimeResult(
+            status="resolved",
+            duration_hours="96",
+            source="测试",
+            message="测试",
+            time_scope="unknown_scope",
+        )
 
 
 def test_resolved_result_requires_positive_duration():

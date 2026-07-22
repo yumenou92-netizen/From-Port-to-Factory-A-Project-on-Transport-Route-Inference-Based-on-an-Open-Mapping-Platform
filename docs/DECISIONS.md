@@ -556,3 +556,25 @@ Implications:
 - Zero candidates and provider/API failures remain `manual_review` and cannot produce route-search coordinates.
 - The domain and routing layers do not implement GUI prompts; future review UI, sampling, cache, and write-back consume the structured geo result.
 - Tightening or relaxing this policy requires real-sample evidence and user confirmation.
+
+## D-029: Phase 18 Uses Explicit Transport Contracts Without Silent Defaults
+
+Date: 2026-07-22
+
+Decision:
+
+Phase 18 introduces source-backed node profiles, transport stages, time scopes, cost components, and manual-review outcomes before connecting real bulk-shipping rates. Missing scope or unconfirmed business inputs remain unknown or `manual_review`; they are not converted into usable defaults.
+
+Reason:
+
+Bulk-shipping trunk, barge last-mile, road last-mile, and future rail segments may share physical nodes while representing different business stages. Their time and cost meanings cannot be recovered safely from a generic transport-mode string or a single total. The graph also needs stable edge keys that distinguish these semantics.
+
+Implications:
+
+- `NodeRegistry` continues to identify one physical node; `NodeProfile` separately records infrastructure type, standard location, time region, capabilities, source, and maintenance date.
+- `bulk_shipping_trunk` and `barge_last_mile` are different transport stages and must not share pricing assumptions.
+- Time scope is explicit. `pure_sailing`, `road_driving`, and `complete_segment` are distinct; an omitted scope stays `None` rather than becoming `complete_segment`.
+- Cost components are positive yuan amounts with source type, rule ID/version, and calculation detail; when supplied, their sum must equal the edge cost.
+- `demo_placeholder` is a source type, not a formal-data fallback.
+- `ManualReviewOutcome` carries a stable reason code, source reference, explanation, and owning work package; any such result keeps the edge out of the searchable graph.
+- `TransportEdge.edge_id` includes stage, time scope, cost-component trace, and manual-review trace so semantically different parallel candidates do not collide.

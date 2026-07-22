@@ -500,6 +500,7 @@ def _select_coordinate_candidate(
             selected=exact_matches[0],
             reason="腾讯地图地点搜索返回唯一精确名称匹配。",
             source_confidence="exact_unique",
+            review_candidates=_to_coordinate_candidates(candidates),
         )
     if len(exact_matches) > 1:
         exact_selection = _auto_select_similar_top_candidate(
@@ -520,6 +521,7 @@ def _select_coordinate_candidate(
             selected=candidates[0],
             reason="腾讯地图地点搜索返回唯一候选地点。",
             source_confidence="unique_candidate",
+            review_candidates=_to_coordinate_candidates(candidates),
         )
 
     similar_selection = _auto_select_similar_top_candidate(

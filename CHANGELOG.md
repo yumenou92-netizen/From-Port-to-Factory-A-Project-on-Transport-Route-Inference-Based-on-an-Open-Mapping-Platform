@@ -2,6 +2,31 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-07-22
+
+### Changed
+
+- Changed missing-node coordinate review to query the raw business name first and each explicit dictionary full name separately, preserving every result for human comparison instead of replacing the raw query.
+- Tencent resolved-coordinate results now retain structured candidate trace fields, including address, category, administrative area, and POI ID, even when place search returns only one candidate.
+- The JSONL review schema now exposes `query_names` and parallel `coordinate_resolutions`; it still does not write the coordinate registry or approve aliases automatically.
+- Applied the second local-only batch of human-confirmed coordinates and explicit aliases: 10 standard coordinate records and 7 alias groups were verified without adding business names or coordinates to Git-tracked files.
+- Applied the final reviewed local batch: 17 additional coordinate records and 9 alias groups now cover every distinct location name in the current freight-rate dataset; the user-confirmed company coordinate supersedes the rejected Tencent candidate for that review item.
+- Added the first Phase 18 contract slice: source-backed node profiles, explicit transport stages and time scopes, traceable cost components, and structured manual-review outcomes.
+- Extended shipping-time results and transport edges without changing existing cost/time search weights; missing time scope remains unknown instead of being silently labeled as a complete segment.
+- Required supplied cost components to equal the transport-edge total and included the new transport semantics in stable edge IDs so parallel options cannot collide.
+- Created a sanitized public GitHub issue for Phase 18 while keeping the detailed internal execution plan local.
+
+### Verification
+
+- Targeted coordinate-review and Tencent-provider tests passed: `15 passed in 0.19s`.
+- After the confirmed local-data update, the no-network audit reduced the deduplicated missing locations from 29 to 17, with 19 planned queries; targeted dictionary/data/backfill tests passed with `24 passed in 0.80s`.
+- Confirmed-node validation passed for all 10 coordinate records and 7 alias groups; the current real-data chain reports 275 standard coordinates, 312 billed candidates, 192 graph-ready candidates, 120 missing-node candidates, and 29 manual-review records.
+- Final confirmed-node validation passed for all 17 remaining locations with zero coordinate conflicts. The current chain reports 292 standard coordinates, all 295 distinct freight-rate location names matched, 312 billed and graph-ready candidates, zero missing-node candidates, and zero deduplicated coordinate-backfill locations.
+- Final local-data targeted tests passed with `24 passed in 0.79s`; full smoke was not repeated because no pricing behavior, graph construction, or route-search behavior changed in this batch.
+- Full smoke was intentionally not repeated because pricing, graph construction, and route search were unchanged.
+- After the Phase 18 W1 contract change, focused contract and affected-chain tests passed with `78 passed in 0.42s`.
+- The required developer smoke passed with `284 passed in 1.39s`; real-data smoke passed. The Tencent diagnostic command completed with API connection failures represented as `manual_review`, so it is not evidence of a successful live Tencent query.
+
 ## 2026-07-21
 
 ### Added

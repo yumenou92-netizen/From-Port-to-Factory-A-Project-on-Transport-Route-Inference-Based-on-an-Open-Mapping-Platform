@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Literal, Protocol
 
+try:
+    from .transport_contracts import ALLOWED_TIME_SCOPES, TimeScope
+except ImportError:  # Support direct script-style imports used by demo scripts.
+    from src.routing.transport_contracts import ALLOWED_TIME_SCOPES, TimeScope
+
 
 ShippingTimeStatus = Literal["resolved", "manual_review"]
 
@@ -19,12 +24,15 @@ class ShippingTimeRequest:
     duration_value: object | None = None
     duration_unit: str = "小时"
     source: str = "manual_input"
+    time_scope: TimeScope | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "stage", _required_text(self.stage, "运输阶段"))
         object.__setattr__(self, "transport_mode", _required_text(self.transport_mode, "运输方式"))
         object.__setattr__(self, "duration_unit", _required_text(self.duration_unit, "运输时间单位"))
         object.__setattr__(self, "source", _required_text(self.source, "运输时间来源"))
+        if self.time_scope is not None and self.time_scope not in ALLOWED_TIME_SCOPES:
+            raise ShippingTimeProviderError(f"不支持的运输时间范围：{self.time_scope}")
 
 
 @dataclass(frozen=True)
@@ -37,6 +45,7 @@ class ShippingTimeResult:
     transport_mode: str | None = None
     input_value: str | None = None
     input_unit: str | None = None
+    time_scope: TimeScope | None = None
 
     def __post_init__(self) -> None:
         if self.status not in {"resolved", "manual_review"}:
@@ -59,6 +68,8 @@ class ShippingTimeResult:
         object.__setattr__(self, "transport_mode", _optional_text(self.transport_mode))
         object.__setattr__(self, "input_value", _optional_text(self.input_value))
         object.__setattr__(self, "input_unit", _optional_text(self.input_unit))
+        if self.time_scope is not None and self.time_scope not in ALLOWED_TIME_SCOPES:
+            raise ShippingTimeProviderError(f"不支持的运输时间范围：{self.time_scope}")
 
     @property
     def is_resolved(self) -> bool:
@@ -100,6 +111,7 @@ class ManualShippingTimeProvider:
             transport_mode=request.transport_mode,
             input_value=str(request.duration_value),
             input_unit=request.duration_unit,
+            time_scope=request.time_scope,
         )
 
 
@@ -134,6 +146,7 @@ def _manual_review(request: ShippingTimeRequest, message: str) -> ShippingTimeRe
         transport_mode=request.transport_mode,
         input_value=str(request.duration_value) if request.duration_value is not None else None,
         input_unit=request.duration_unit,
+        time_scope=request.time_scope,
     )
 
 
@@ -147,6 +160,7 @@ def _unconfigured_provider_result(request: ShippingTimeRequest, source: str) -> 
         transport_mode=request.transport_mode,
         input_value=str(request.duration_value) if request.duration_value is not None else None,
         input_unit=request.duration_unit,
+        time_scope=request.time_scope,
     )
 
 

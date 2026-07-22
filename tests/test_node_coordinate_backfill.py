@@ -10,7 +10,7 @@ from src.data.node_coordinate_backfill import (
 from src.geo.coordinate_provider import CoordinateResolution
 
 
-def test_collect_missing_node_locations_deduplicates_endpoint_sides_and_uses_explicit_full_name():
+def test_collect_missing_node_locations_keeps_raw_and_explicit_full_name_queries():
     candidates = [
         make_candidate("rate_1", None, "node_b", "测试东港", "客户甲"),
         make_candidate("rate_2", None, None, "测试东港", "客户乙"),
@@ -24,7 +24,7 @@ def test_collect_missing_node_locations_deduplicates_endpoint_sides_and_uses_exp
 
     assert [location.raw_name for location in locations] == ["测试东港", "客户乙"]
     port = locations[0]
-    assert port.query_name == "测试东港码头有限公司"
+    assert port.query_names == ("测试东港", "测试东港码头有限公司")
     assert port.missing_sides == ("origin",)
     assert port.candidate_count == 2
     assert port.dictionary_status == "explicit_full_short_pair_review_required"
@@ -37,12 +37,13 @@ def test_coordinate_backfill_query_returns_candidates_without_registration():
 
     row = backfill_review_to_row(reviews[0])
 
-    assert row["coordinate_resolution"]["status"] == "resolved"
-    assert row["coordinate_resolution"]["longitude"] == 110.1
+    assert row["query_names"] == ["甲港"]
+    assert row["coordinate_resolutions"][0]["status"] == "resolved"
+    assert row["coordinate_resolutions"][0]["longitude"] == 110.1
     assert "不自动注册节点或别名" in row["review_action"]
 
 
-def test_ambiguous_dictionary_pair_keeps_raw_query_name_for_manual_review():
+def test_ambiguous_dictionary_pair_keeps_all_queries_for_manual_comparison():
     entries = [
         NameDictionaryEntry(2, "港口码头", "甲港有限公司", "中心码头"),
         NameDictionaryEntry(3, "港口码头", "乙港有限公司", "中心码头"),
@@ -53,8 +54,22 @@ def test_ambiguous_dictionary_pair_keeps_raw_query_name_for_manual_review():
         entries,
     )[0]
 
-    assert location.query_name == "中心码头"
+    assert location.query_names == ("中心码头", "乙港有限公司", "甲港有限公司")
     assert location.dictionary_status == "ambiguous_dictionary_mapping_review_required"
+
+
+def test_coordinate_backfill_queries_raw_name_before_dictionary_full_name():
+    entries = [NameDictionaryEntry(2, "港口码头", "测试东港码头有限公司", "测试东港")]
+    location = collect_missing_node_locations(
+        [make_candidate("rate_1", None, "node_b", "测试东港", "客户")],
+        entries,
+    )[0]
+    provider = RecordingProvider()
+
+    review = query_coordinate_candidates([location], provider)[0]
+
+    assert provider.queries == ["测试东港", "测试东港码头有限公司"]
+    assert [result.query_name for result in review.resolutions] == provider.queries
 
 
 class FakeProvider:
@@ -70,6 +85,15 @@ class FakeProvider:
             message="test",
             source_confidence="top1",
         )
+
+
+class RecordingProvider(FakeProvider):
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def resolve(self, name: str) -> CoordinateResolution:
+        self.queries.append(name)
+        return super().resolve(name)
 
 
 def make_candidate(
