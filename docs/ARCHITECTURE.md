@@ -1,6 +1,6 @@
 # ARCHITECTURE.md
 
-Updated: 2026-07-17
+Updated: 2026-07-21
 
 This document describes the current architecture and the next real-data integration boundary of the route inference prototype.
 
@@ -38,6 +38,13 @@ flowchart TD
     W --> X["routing/route_result.py segment explanations"]
 
     M["demos/leader.py"] --> N["demos/leader_*.py"]
+    M --> LF["demos/leader_full_flow.py<br/>A/B input and real-first orchestration"]
+    LF --> D2
+    LF --> H
+    LF --> U
+    LF --> V
+    LF --> W
+    LF --> X
     N --> U
     N --> V
     N --> W
@@ -128,7 +135,7 @@ Rule:
 
 - the same physical location must not become multiple graph nodes.
 - coordinate lookup must check the standard node registry and known coordinate tables before any external map API.
-- if Tencent Maps is not configured or returns ambiguous results, return manual review rather than guessing.
+- if Tencent Maps is not configured, fails, or returns no candidates, return manual review rather than guessing; for multiple candidates, follow D-028: use traceable top1 with `source_confidence` and retained candidates.
 - Tencent Maps API keys are read only from `TENCENT_MAP_API_KEY`.
 
 ### Request And Unit Layer
@@ -206,7 +213,7 @@ Current state:
 - truck-route adapter exists as an optional future enhancement, not the current dependency;
 - unknown bulk and container truck costs consume confirmed road distance from the geo layer, and currently accept Tencent normal driving distance as the prototype distance source;
 - `build_transport_edge()` combines resolved shipping time with freight-rate and cost results;
-- the real-data `EdgeCandidate` flow still does not supply shipping time to `TransportEdge`;
+- the real-data `EdgeCandidate` bridge accepts explicit manual time for integration validation; a formal business shipping-time source is still missing;
 - Tencent Maps must not be called directly from cost rules.
 
 ### Customer Rule Layer
@@ -252,7 +259,8 @@ Current state:
 - `routing/route_search.py` searches cost and time independently, returns the chosen edge key per segment, and binds each result to a deterministic objective-weight graph signature;
 - `routing/route_result.py` rehydrates complete segments, rejects stale search results, verifies source fields, checks route totals against segment sums, and exports explicit rows for no-path/manual-review outcomes;
 - the old `graph_builder.py`, `route_planner.py`, `models.py`, and duplicate standalone cost-rule demo have been removed from `src`;
-- the formal chain is not yet populated from real `EdgeCandidate` records.
+- real `EdgeCandidate` records can enter the formal chain through `routing/real_data_bridge.py` when node IDs and explicit time are present;
+- `demos/leader_full_flow.py` composes the same formal model for a complete A-to-B leader demo, prioritizes real nodes and maintained rates, and confines missing north-to-south shipping values to an explicit demo-only placeholder layer.
 
 ## Important Boundaries
 

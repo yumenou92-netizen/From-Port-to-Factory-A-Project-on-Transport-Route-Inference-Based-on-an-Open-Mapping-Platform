@@ -6,6 +6,7 @@ __pycache__/
 # Local dependency/cache folders
 .python_packages/
 .pytest_cache/
+.pytest_tmp/
 
 # Local environment
 .env

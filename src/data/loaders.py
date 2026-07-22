@@ -9,7 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.domain.cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
 from src.domain.freight_rate import FreightRate, FreightRateError, create_freight_rate
@@ -25,6 +25,9 @@ from src.domain.route_request import (
     RouteRequest,
     validate_request_billing,
 )
+
+if TYPE_CHECKING:
+    from src.domain.node_registry import NodeRegistry
 
 
 REAL_RATE_FILE = "运价表.json"
@@ -139,6 +142,7 @@ class RealDataBundle:
     freight_rates: list[FreightRate]
     nodes: list[NodeRecord]
     additional_fees: list[AdditionalFee]
+    node_registry: NodeRegistry | None = None
 
     @property
     def node_by_name(self) -> dict[str, NodeRecord]:
@@ -180,9 +184,25 @@ def load_real_data_bundle(data_dir: str | Path) -> RealDataBundle:
     coordinate_rows = read_json_lines(find_required_file(root, REAL_COORDINATE_FILE))
     additional_fee_rows = read_json_lines(find_required_file(root, REAL_ADDITIONAL_FEE_FILE))
     nodes = [parse_node_record(row, index) for index, row in enumerate(coordinate_rows, start=1)]
+    from src.data.name_dictionary import (
+        NameDictionaryError,
+        build_external_alias_rules,
+        find_name_dictionary_file,
+        load_name_dictionary_entries,
+    )
     from src.domain.node_registry import build_node_registry
 
-    node_registry = build_node_registry(nodes)
+    try:
+        name_dictionary_path = find_name_dictionary_file(root)
+        external_alias_rules = (
+            build_external_alias_rules(load_name_dictionary_entries(name_dictionary_path))
+            if name_dictionary_path is not None
+            else ()
+        )
+    except NameDictionaryError as exc:
+        raise DataLoadError(f"名称字典无法安全加载：{exc}") from exc
+
+    node_registry = build_node_registry(nodes, external_alias_rules=external_alias_rules)
     freight_rates = []
     for index, row in enumerate(rate_rows, start=1):
         rate = parse_freight_rate(row, index)
@@ -200,6 +220,7 @@ def load_real_data_bundle(data_dir: str | Path) -> RealDataBundle:
         freight_rates=freight_rates,
         nodes=nodes,
         additional_fees=[parse_additional_fee(row, index) for index, row in enumerate(additional_fee_rows, start=1)],
+        node_registry=node_registry,
     )
 
 

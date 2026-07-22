@@ -15,15 +15,15 @@ def main() -> None:
     except DataLoadError as exc:
         raise SystemExit(f"真实业务数据加载失败: {exc}") from exc
 
-    registry = build_node_registry(bundle.nodes)
+    registry = bundle.node_registry or build_node_registry(bundle.nodes)
     report = analyze_freight_rate_node_coverage(registry, bundle.freight_rates)
 
-    print("1.Node Register Preview")
-    print(f"Original_Coordinates_Record: {len(bundle.nodes)} 条")
-    print(f"Number_of Stander_Nodes: {len(registry.nodes)} 个")
-    print(f"Auto-recognition_of_alias_groups: {len(registry.alias_groups)} 组")
-    print(f"Manual_Confirm_alias_groups: {len(registry.alias_review_groups)} 组")
-    print(f"Coordinate_Conflict_Warning: {len(registry.coordinate_conflicts)} 组")
+    print("一、标准节点注册结果")
+    print(f"原始坐标记录：{len(bundle.nodes)} 条")
+    print(f"标准节点数量：{len(registry.nodes)} 个")
+    print(f"自动识别别名组：{len(registry.alias_groups)} 组")
+    print(f"需人工确认别名组：{len(registry.alias_review_groups)} 组")
+    print(f"坐标冲突预警：{len(registry.coordinate_conflicts)} 组")
 
     print("\n二、运价表地点匹配结果")
     print(f"运价记录: {report.total_rate_records} 条")

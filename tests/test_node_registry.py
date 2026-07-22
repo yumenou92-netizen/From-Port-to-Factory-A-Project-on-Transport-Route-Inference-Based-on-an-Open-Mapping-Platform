@@ -4,6 +4,7 @@ from src.data.loaders import NodeRecord, make_node_id
 from src.domain.freight_rate import FreightRate, create_freight_rate
 from src.domain.node_registry import (
     AliasRule,
+    ExternalAliasRule,
     analyze_freight_rate_node_coverage,
     build_node_registry,
 )
@@ -80,6 +81,45 @@ def test_build_node_registry_supports_forced_physical_node_merge():
     assert canonical.canonical_name == "南方港口"
     assert canonical.aliases == ("南方港口", "南方港口一期", "南方港口二期")
     assert len(registry.coordinate_conflicts) == 1
+
+
+def test_external_alias_rule_maps_full_name_to_existing_coordinate_node_without_changing_id():
+    registry = build_node_registry(
+        [NodeRecord(node_id="raw_1", name="测试东港", longitude=119.3, latitude=26.1)],
+        external_alias_rules=[
+            ExternalAliasRule(
+                canonical_name="测试东港码头有限公司",
+                aliases=("测试东港",),
+                source="名称字典.xlsx#3",
+            )
+        ],
+    )
+
+    full_name = registry.require("测试东港码头有限公司")
+    short_name = registry.require("测试东港")
+
+    assert full_name.node_id == short_name.node_id == make_node_id("测试东港")
+    assert full_name.canonical_name == "测试东港"
+    assert full_name.aliases == ("测试东港", "测试东港码头有限公司")
+
+
+def test_external_alias_rule_with_two_existing_nodes_stays_manual_review():
+    registry = build_node_registry(
+        [
+            NodeRecord(node_id="raw_1", name="甲港", longitude=110.0, latitude=22.0),
+            NodeRecord(node_id="raw_2", name="乙港", longitude=111.0, latitude=23.0),
+        ],
+        external_alias_rules=[
+            ExternalAliasRule(
+                canonical_name="甲港",
+                aliases=("乙港",),
+                source="名称字典.xlsx#4",
+            )
+        ],
+    )
+
+    assert registry.require("甲港").node_id != registry.require("乙港").node_id
+    assert ("乙港", "甲港") in registry.alias_review_groups
 
 
 def test_analyze_freight_rate_node_coverage_reports_unmatched_locations():

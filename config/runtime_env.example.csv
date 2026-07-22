@@ -9,3 +9,4 @@ SMOKE_RUN_TENCENT_PROBE,false,false,只有显式启用且存在 Key 时才调用
 TENCENT_MAP_PROBE_REGION,北京,false,Tencent 地图公开点探针区域；可在本地改为深圳等公开测试区域。
 TENCENT_MAP_PROBE_ORIGIN,北京大学,false,Tencent 地图公开点探针起点；可在本地改为深圳大学粤海校区紫薇斋等公开地点。
 TENCENT_MAP_PROBE_DESTINATION,北京站,false,Tencent 地图公开点探针终点；可在本地改为深圳站等公开地点。
+TENCENT_MAP_PROBE_INTERACTIVE,auto,false,Tencent 地图候选点人工选择开关；auto 表示交互控制台自动提示，可设 true 强制提示或 false 跳过。

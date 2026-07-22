@@ -69,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     show_cost_rule_demo()
     show_latest_rate_demo()
     show_formal_route_demo()
+    show_leader_full_flow_contract()
     show_real_data_snapshot(skip=args.skip_real_data)
     show_update_contract()
 
@@ -279,6 +280,16 @@ def show_formal_route_demo() -> None:
     print_route_result("fastest_time", recommendations.fastest_time)
 
 
+def show_leader_full_flow_contract() -> None:
+    print_header("5. Leader Full-Flow Demo Contract")
+    print("Command: python -B -m src.demos.leader full-flow")
+    print("Input: north port A and customer factory B")
+    print("Output: lowest-cost and fastest-time route recommendations")
+    print("Real-first sources: local nodes, maintained rates, Tencent road route, confirmed rules")
+    print("Demo-only fallback: north-port-to-south-port shipping cost/time and customer profile")
+    print("Excluded pending confirmation: AdditionalFee")
+
+
 def make_demo_edge(
     edge_id: str,
     start: str,
@@ -330,7 +341,7 @@ def print_route_result(label: str, result) -> None:
 
 
 def show_real_data_snapshot(*, skip: bool) -> None:
-    print_header("5. Optional Real Data Snapshot")
+    print_header("6. Optional Real Data Snapshot")
     if skip:
         print("Skipped by --skip-real-data.")
         return

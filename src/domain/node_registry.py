@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable
 
 try:
@@ -23,6 +23,19 @@ class NodeRegistryError(Exception):
 class AliasRule:
     canonical_name: str
     aliases: tuple[str, ...]
+
+    @property
+    def all_names(self) -> tuple[str, ...]:
+        return (self.canonical_name, *self.aliases)
+
+
+@dataclass(frozen=True)
+class ExternalAliasRule:
+    """Adds source-backed aliases without changing an existing coordinate node's id."""
+
+    canonical_name: str
+    aliases: tuple[str, ...]
+    source: str
 
     @property
     def all_names(self) -> tuple[str, ...]:
@@ -82,6 +95,7 @@ class NodeRegistry:
 def build_node_registry(
     node_records: Iterable[NodeRecord],
     alias_rules: Iterable[AliasRule] | None = None,
+    external_alias_rules: Iterable[ExternalAliasRule] | None = None,
     auto_alias: bool = True,
     coordinate_tolerance: float = DEFAULT_COORDINATE_TOLERANCE,
 ) -> NodeRegistry:
@@ -103,9 +117,13 @@ def build_node_registry(
         if left_root != right_root:
             parent[right_root] = left_root
 
-    alias_review_groups: tuple[tuple[str, ...], ...] = ()
+    alias_review_groups: list[tuple[str, ...]] = []
     if auto_alias:
-        mergeable_alias_groups, alias_review_groups = classify_auto_alias_names(records_by_name, coordinate_tolerance)
+        mergeable_alias_groups, auto_alias_review_groups = classify_auto_alias_names(
+            records_by_name,
+            coordinate_tolerance,
+        )
+        alias_review_groups.extend(auto_alias_review_groups)
         for alias_names in mergeable_alias_groups:
             first_name = alias_names[0]
             for name in alias_names[1:]:
@@ -156,13 +174,51 @@ def build_node_registry(
         if conflict is not None:
             coordinate_conflicts.append(conflict)
 
+    _apply_external_alias_rules(
+        standard_nodes,
+        name_to_node_id,
+        alias_groups,
+        alias_review_groups,
+        tuple(external_alias_rules or ()),
+    )
+
     return NodeRegistry(
         nodes=standard_nodes,
         name_to_node_id=name_to_node_id,
         alias_groups=tuple(alias_groups),
-        alias_review_groups=alias_review_groups,
+        alias_review_groups=tuple(alias_review_groups),
         coordinate_conflicts=tuple(coordinate_conflicts),
     )
+
+
+def _apply_external_alias_rules(
+    nodes: dict[str, StandardNode],
+    name_to_node_id: dict[str, str],
+    alias_groups: list[tuple[str, ...]],
+    alias_review_groups: list[tuple[str, ...]],
+    rules: tuple[ExternalAliasRule, ...],
+) -> None:
+    for rule in rules:
+        names = tuple(name.strip() for name in rule.all_names if name.strip())
+        known_node_ids = {
+            name_to_node_id[normalize_lookup_name(name)]
+            for name in names
+            if normalize_lookup_name(name) in name_to_node_id
+        }
+        if not known_node_ids:
+            continue
+        if len(known_node_ids) > 1:
+            alias_review_groups.append(tuple(sorted(set(names))))
+            continue
+
+        node_id = known_node_ids.pop()
+        node = nodes[node_id]
+        merged_aliases = tuple(sorted(set((*node.aliases, *names))))
+        nodes[node_id] = replace(node, aliases=merged_aliases)
+        for name in merged_aliases:
+            name_to_node_id[normalize_lookup_name(name)] = node_id
+        if len(merged_aliases) > 1 and merged_aliases != node.aliases:
+            alias_groups.append(merged_aliases)
 
 
 def collect_records_by_name(records: list[NodeRecord]) -> dict[str, list[NodeRecord]]:

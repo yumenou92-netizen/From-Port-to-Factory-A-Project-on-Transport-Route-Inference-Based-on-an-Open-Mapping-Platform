@@ -103,16 +103,15 @@ def test_tencent_coordinate_provider_keeps_ambiguous_candidates_for_manual_revie
 
     result = provider.resolve("客户A")
 
-    assert not result.is_resolved
-    assert result.status == "manual_review"
-    assert "返回 2 个候选" in result.message
-    assert result.source_confidence == "manual_top5_candidates"
+    assert result.is_resolved
+    assert result.status == "resolved"
+    assert result.canonical_name == result.candidates[0].title
+    assert result.source_confidence == "auto_top1_name_match"
     assert len(result.candidates) == 2
     assert result.candidates[0].rank == 1
-    assert result.candidates[0].title == "客户A南门"
     assert result.candidates[1].rank == 2
-    assert result.longitude is None
-    assert result.latitude is None
+    assert result.longitude == 113.2
+    assert result.latitude == 23.1
 
 
 def test_tencent_coordinate_provider_auto_selects_similar_top_candidate():
@@ -134,10 +133,10 @@ def test_tencent_coordinate_provider_auto_selects_similar_top_candidate():
 
     assert result.is_resolved
     assert result.canonical_name == "Shenzhen University Yuehai Campus"
-    assert result.source_confidence == "auto_similar_top1"
+    assert result.source_confidence == "auto_top1_name_match"
     assert result.longitude == 113.2
     assert result.latitude == 23.1
-    assert result.candidates == ()
+    assert len(result.candidates) == 3
 
 
 def test_tencent_coordinate_provider_returns_top5_for_manual_candidate_review():
@@ -161,9 +160,12 @@ def test_tencent_coordinate_provider_returns_top5_for_manual_candidate_review():
 
     result = provider.resolve("Different Place")
 
-    assert not result.is_resolved
-    assert result.status == "manual_review"
-    assert result.source_confidence == "manual_top5_candidates"
+    assert result.is_resolved
+    assert result.status == "resolved"
+    assert result.canonical_name == "Candidate 1"
+    assert result.source_confidence == "auto_top1_unclustered"
+    assert result.longitude == 114.0
+    assert result.latitude == 24.0
     assert len(result.candidates) == 5
     assert [candidate.rank for candidate in result.candidates] == [1, 2, 3, 4, 5]
     assert [candidate.title for candidate in result.candidates] == [
@@ -175,6 +177,39 @@ def test_tencent_coordinate_provider_returns_top5_for_manual_candidate_review():
     ]
     assert result.candidates[0].source_id == "poi-1"
     assert result.candidates[-1].source_id == "poi-5"
+
+
+def test_tencent_coordinate_provider_marks_nearby_multi_candidate_top1_cluster():
+    def fake_get_json(url, params, timeout_seconds):
+        return {
+            "status": 0,
+            "message": "query ok",
+            "data": [
+                _place_candidate("Candidate One", poi_id="poi-1"),
+                _place_candidate(
+                    "Nearby Company",
+                    poi_id="poi-2",
+                    longitude=113.201,
+                    latitude=23.101,
+                ),
+                _place_candidate(
+                    "Far Warehouse",
+                    poi_id="poi-3",
+                    longitude=114.2,
+                    latitude=24.1,
+                ),
+            ],
+        }
+
+    client = TencentMapClient("fake-secret", get_json=fake_get_json)
+    provider = TencentMapCoordinateProvider(client, region="Shenzhen", page_size=20)
+
+    result = provider.resolve("Different Place")
+
+    assert result.is_resolved
+    assert result.canonical_name == "Candidate One"
+    assert result.source_confidence == "auto_top1_nearby_cluster"
+    assert len(result.candidates) == 3
 
 
 def test_tencent_coordinate_provider_api_error_does_not_leak_key():

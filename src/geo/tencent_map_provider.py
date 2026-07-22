@@ -5,6 +5,7 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from decimal import Decimal, InvalidOperation
+from math import asin, cos, radians, sin, sqrt
 from typing import Any, Callable, Mapping
 
 try:
@@ -41,6 +42,8 @@ DEFAULT_TIMEOUT_SECONDS = 10.0
 MANUAL_REVIEW_CANDIDATE_LIMIT = 5
 AUTO_SIMILAR_TOP_COUNT = 3
 AUTO_SIMILARITY_THRESHOLD = 0.9
+AUTO_TOP1_NEARBY_RADIUS_METERS = 300
+EARTH_RADIUS_METERS = 6371000
 
 HttpGetJson = Callable[[str, Mapping[str, Any], float], Mapping[str, Any]]
 
@@ -264,6 +267,7 @@ class TencentMapCoordinateProvider:
             source="tencent_map_place_search",
             message=selection.reason,
             source_confidence=selection.source_confidence,
+            candidates=selection.review_candidates,
         )
 
 
@@ -505,11 +509,11 @@ def _select_coordinate_candidate(
         )
         if exact_selection.selected is not None:
             return exact_selection
-        return CoordinateCandidateSelection(
-            selected=None,
-            reason="其中存在多个精确名称匹配",
-            source_confidence="manual_top5_candidates",
-            review_candidates=_to_coordinate_candidates(candidates),
+        return _auto_select_top_candidate(
+            query_name,
+            exact_matches,
+            review_candidates=candidates,
+            reason_prefix="Tencent Maps returned multiple exact-name matches",
         )
     if len(candidates) == 1:
         return CoordinateCandidateSelection(
@@ -526,12 +530,16 @@ def _select_coordinate_candidate(
     if similar_selection.selected is not None:
         return similar_selection
 
-    return CoordinateCandidateSelection(
-        selected=None,
-        reason="且没有唯一精确名称匹配或可自动合并的高度相似候选",
-        source_confidence="manual_top5_candidates",
-        review_candidates=_to_coordinate_candidates(candidates),
+    return _auto_select_top_candidate(
+        query_name,
+        candidates,
+        review_candidates=candidates,
+        reason_prefix=(
+            "Tencent Maps returned multiple candidates without an exact unique "
+            "or conservative similar-cluster match"
+        ),
     )
+
 
 
 def _normalize_title(value: str) -> str:
@@ -560,8 +568,66 @@ def _auto_select_similar_top_candidate(
             f"{reason_prefix}，前 {len(top_candidates)} 个候选名称、城市和行政区一致性较高，"
             "已自动采用首位候选。"
         ),
-        source_confidence="auto_similar_top1",
+        source_confidence="auto_top1_name_match",
+        review_candidates=_to_coordinate_candidates(candidates),
     )
+
+
+def _auto_select_top_candidate(
+    query_name: str,
+    candidates: list[TencentMapPlaceCandidate],
+    *,
+    review_candidates: list[TencentMapPlaceCandidate],
+    reason_prefix: str,
+) -> CoordinateCandidateSelection:
+    selected = candidates[0]
+    normalized_query = _normalize_title(query_name)
+    normalized_title = _normalize_title(selected.title)
+    trace = _to_coordinate_candidates(review_candidates)
+
+    if _titles_match(normalized_title, normalized_query):
+        confidence = "auto_top1_name_match"
+        reason_suffix = "top1 title matches the query"
+    elif _has_nearby_candidate(selected, candidates[1:3]):
+        confidence = "auto_top1_nearby_cluster"
+        reason_suffix = (
+            f"top1 has another leading candidate within {AUTO_TOP1_NEARBY_RADIUS_METERS} meters"
+        )
+    else:
+        confidence = "auto_top1_unclustered"
+        reason_suffix = "top1 is selected by provider ranking and should be spot-checked"
+
+    return CoordinateCandidateSelection(
+        selected=selected,
+        reason=(
+            f"{reason_prefix}; prototype policy auto-selected top1 ({selected.title}); "
+            f"{reason_suffix}."
+        ),
+        source_confidence=confidence,
+        review_candidates=trace,
+    )
+
+
+def _has_nearby_candidate(
+    selected: TencentMapPlaceCandidate,
+    candidates: list[TencentMapPlaceCandidate],
+) -> bool:
+    return any(
+        _distance_meters(selected, candidate) <= AUTO_TOP1_NEARBY_RADIUS_METERS
+        for candidate in candidates
+    )
+
+
+def _distance_meters(
+    left: TencentMapPlaceCandidate,
+    right: TencentMapPlaceCandidate,
+) -> float:
+    left_lat = radians(left.latitude)
+    right_lat = radians(right.latitude)
+    delta_lat = radians(right.latitude - left.latitude)
+    delta_lon = radians(right.longitude - left.longitude)
+    a = sin(delta_lat / 2) ** 2 + cos(left_lat) * cos(right_lat) * sin(delta_lon / 2) ** 2
+    return 2 * EARTH_RADIUS_METERS * asin(sqrt(a))
 
 
 def _same_city_and_district(candidates: list[TencentMapPlaceCandidate]) -> bool:

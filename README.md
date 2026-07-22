@@ -79,6 +79,22 @@ config/runtime_env.example.csv
 
 当前已知未完成项：项目级 `pytest.ini` 临时目录配置今天先跳过；开发者 smoke 入口内部已使用项目本地临时目录规避 Windows 默认 pytest 临时目录权限问题。
 
+## 6. 第一版全流程领导 Demo
+
+```powershell
+python -B -m src.demos.leader full-flow
+```
+
+按提示输入北港点 A 和客户工厂 B。程序优先使用本地真实节点、真实维护运价、腾讯地图普通驾车距离/时间和已确认计费规则，构建正式 `MultiDiGraph`，分别输出费用最低与时间最短路线。
+
+当前只对缺失的北港至南港船运费用/时间和“客户无自有码头”演示画像使用明确标记的占位数据。AdditionalFee 在归属未确认前不计入。API Key 仅从本地 `local_env/runtime_env.csv` 读取，不打印、不提交。
+
+也可以在预演时直接传入地点（`北港实际名称`、`客户工厂实际名称` 必须替换为腾讯地图可检索的真实业务名称，不是可直接运行的固定示例值）：
+
+```powershell
+python -B -m src.demos.leader full-flow --origin "北港实际名称" --destination "客户工厂实际名称" --region "全国"
+```
+
 ## Developer Feature Demo
 
 ```powershell
@@ -91,3 +107,20 @@ current model behavior can be inspected from one stable entry. Use
 `src.dev.smoke_test` for pass/fail verification; use `src.dev.feature_demo` for
 human-readable behavior display. Tencent Maps is not called by this feature
 demo.
+
+### Missing-node coordinate review
+
+```powershell
+# Build a deduplicated local review list; does not call an API or write business data.
+python -B -m src.demos.node_coordinate_backfill
+
+# In the user's PyCharm environment only: query Tencent candidates for human review.
+python -B -m src.demos.node_coordinate_backfill --query-tencent --region "全国"
+```
+
+The list is written to `output/node_coordinate_backfill_review.jsonl`. A local
+`名称字典.xlsx` contributes an alias only when one row has both a full and short
+name and one side is already a registered coordinate node. It never supplies a
+missing coordinate or automatically merges two existing nodes. After human
+review, approved coordinates can be written to the local `地点经纬度.json` under
+the separate data-governance process.

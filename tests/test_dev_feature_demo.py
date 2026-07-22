@@ -27,5 +27,8 @@ def test_feature_demo_runs_without_real_data_and_masks_secret(tmp_path, capsys):
     assert "unknown container truck" in output
     assert "Latest Freight Rate Selection" in output
     assert "TransportEdge -> MultiDiGraph -> Route Search" in output
+    assert "Leader Full-Flow Demo Contract" in output
+    assert "north port A and customer factory B" in output
+    assert "Excluded pending confirmation: AdditionalFee" in output
     assert "<set; 11 chars>" in output
     assert secret_value not in output

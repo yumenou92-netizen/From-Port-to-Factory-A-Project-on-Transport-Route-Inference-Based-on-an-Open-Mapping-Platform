@@ -2,7 +2,7 @@
 
 This document records durable business and technical decisions. Add new decisions when rules change.
 
-Updated: 2026-07-17
+Updated: 2026-07-21
 
 ## D-001: Prototype Scope
 
@@ -514,3 +514,45 @@ Implications:
 - Orders measured in `柜` must not be silently treated as `箱`; they remain `manual_review` unless a separate unit policy is confirmed.
 - Known maintained truck rates still take priority.
 - Cost rules continue to consume geo-layer distance only and must not call Tencent Maps directly.
+
+## D-027: Leader Full-Flow Demo Uses Real-First Minimal Placeholders
+
+Date: 2026-07-21
+
+Decision:
+
+The first full-flow leader demo accepts a north port A and customer factory B, then returns independent lowest-cost and fastest-time recommendations through the formal `TransportEdge`, `MultiDiGraph`, search, and result chain. Real data and confirmed providers take priority. Demo placeholders are allowed only where the current project lacks confirmed business inputs.
+
+Reason:
+
+The presentation must demonstrate the target end-to-end workflow without presenting incomplete data as production truth. A narrow, visible placeholder layer lets the complete model run while preserving the boundary between verified data and assumptions.
+
+Implications:
+
+- Local registered coordinates, maintained freight rates, Tencent road distance/time, and confirmed cost rules are used before any placeholder.
+- Only north-port-to-south-port shipping cost/time and the explicitly displayed no-private-terminal customer profile may be placeholders in this version.
+- Existing A/B last-mile maintained rates take selection priority over closer unknown-route candidates.
+- AdditionalFee is excluded until segment attribution is confirmed; it is neither assigned arbitrarily nor defaulted to zero.
+- Every selected segment exposes source categories such as `real_business_data`, `tencent_map`, `confirmed_cost_rule`, and `demo_placeholder`.
+- Tencent API keys remain in local runtime configuration. Real API rehearsal is performed in the user's PyCharm environment and is not a repository secret or Codex-network requirement.
+
+## D-028: Prototype Multi-Candidate Place Search Defaults To Traceable Top1
+
+Date: 2026-07-20
+
+Decision:
+
+When Tencent place search returns multiple candidates in the prototype, the geo provider resolves to the first-ranked result instead of blocking the route chain. It must retain a confidence label and up to five structured candidates for traceability.
+
+Reason:
+
+For bulk-freight route comparison, small coordinate differences among nearby results have negligible cost impact, while blocking every ambiguous result creates disproportionate manual work. The project accepts Tencent ranking as the prototype default but preserves evidence so the policy can be audited against real samples.
+
+Implications:
+
+- Name-aligned candidates use `auto_top1_name_match`.
+- Candidates clustered near top1 use `auto_top1_nearby_cluster`.
+- Other multiple results use `auto_top1_unclustered`; this is resolved but lower confidence, not proof of exact identity.
+- Zero candidates and provider/API failures remain `manual_review` and cannot produce route-search coordinates.
+- The domain and routing layers do not implement GUI prompts; future review UI, sampling, cache, and write-back consume the structured geo result.
+- Tightening or relaxing this policy requires real-sample evidence and user confirmation.

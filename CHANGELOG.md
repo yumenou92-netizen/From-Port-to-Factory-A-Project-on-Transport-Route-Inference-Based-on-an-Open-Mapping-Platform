@@ -2,6 +2,51 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-07-21
+
+### Added
+
+- Added `python -B -m src.demos.leader full-flow`, an interactive leader demo that accepts north port A and customer factory B and returns independent lowest-cost and fastest-time recommendations through the formal graph/search chain.
+- Added real-first candidate composition: local coordinates and maintained last-mile rates take priority, Tencent Maps supplies unresolved coordinates and road distance/time, and confirmed unknown-route cost rules handle unmaintained last-mile routes.
+- Added an isolated `demo_placeholder` layer for the currently missing north-to-south shipping cost/time and the displayed no-private-terminal customer profile; AdditionalFee remains explicitly excluded pending attribution.
+- Added per-edge source trace categories and a final minimal-placeholder disclosure in the leader output.
+- Added coordinate `source_confidence` to the full-flow leader output so Tencent top1 results can be audited during rehearsal.
+- Added local `名称字典.xlsx` parsing: only explicit full-name/short-name pairs may extend an already registered coordinate node's aliases; blank pairs and conflicts stay in manual review.
+- Added `src.demos.node_coordinate_backfill`, which deduplicates missing-node candidate endpoints into a JSONL review list and can query Tencent candidate coordinates only when explicitly requested; it never writes `地点经纬度.json` or auto-registers an alias.
+- Made the name-dictionary reader tolerate sparse Excel rows that contain fewer than three physical cells after a standards-compliant workbook save.
+- Completed the first local-only batch of three human-confirmed node mappings; no business names or coordinates were added to Git-tracked files.
+- Added integration coverage for dual recommendations, real-rate priority, placeholder confinement, source labels, and unresolved-coordinate failure.
+- Updated the developer feature demo with the full-flow command and source boundary.
+
+### Verification
+
+- After the sparse-row compatibility fix and local node updates, targeted tests passed with `20 passed in 0.55s`; the real-data chain improved to `492 / 314 / 152 / 162 / 27`, with 29 deduplicated missing locations remaining.
+- Full developer smoke passed after the name-dictionary and coordinate-review additions: `259 passed in 1.06s`; real-data smoke retained `492 / 314 / 144 / 170 / 27`.
+- Full developer smoke passed with `251 passed` after the coordinate-confidence display update.
+- Real-data smoke retained the verified `492 / 314 / 144 / 170 / 27` counts and completed successfully.
+- Tencent API integration remains local-only and is ready for the user to rehearse in PyCharm with `local_env/runtime_env.csv`.
+
+## 2026-07-20
+
+### Changed
+
+- Updated `src/demos/leader.py` to load `local_env/runtime_env.csv` before importing leader demo modules, so direct commands such as `python -B -m src.demos.leader cost-rules` can find project-local dependencies without manual `PYTHONPATH` setup.
+- Kept leader demo modules lazy-loaded by key, preserving the existing demo menu while avoiding unnecessary imports before the runtime environment is ready.
+- Recorded the user-confirmed demonstration schedule: enter demo-freeze/convergence on 2026-07-23 and prepare the first formal demo for the 2026-07-24 10:30 model presentation.
+- Added interactive manual candidate selection to `src/demos/tencent_map_probe.py`: when Tencent place search returns structured manual-review candidates, a local interactive console can accept a candidate rank and continue to the driving-route distance probe.
+- Added `TENCENT_MAP_PROBE_INTERACTIVE` to the runtime env template and smoke-test environment snapshot; non-interactive smoke runs skip the prompt so automated validation does not hang.
+- Updated the formal Tencent coordinate provider so multi-candidate place-search results no longer block by default in the prototype: top 1 is auto-selected, `source_confidence` records `auto_top1_name_match`, `auto_top1_nearby_cluster`, or `auto_top1_unclustered`, and the top 5 candidates remain attached for review.
+- Local demo display text is now leader-friendly Chinese in the Tencent Maps probe, real-data demo, and node-registry demo; internal status codes, environment variables, and output file names remain unchanged for traceability.
+- Recorded the main-chain real-data smoke acceptance in `docs/PROJECT_STATE.md`, including candidate counts, missing-node counts, manual-review counts, formal graph edge counts, CSV output checks, and remaining automation blockers.
+- Added `docs/2026-07-20_ACCEPTANCE_LOG.md` as the fourth-stage module acceptance log with a fixed record format for command, result, pass/fail, questions, and business-confirmation needs.
+
+### Verification
+
+- Direct leader demo commands for `cost-rules` and `route-search` run without manually setting `PYTHONPATH`.
+- Tencent probe manual-selection helper is covered by tests for accepted rank input and disabled non-interactive behavior.
+- Tencent coordinate-provider tests cover top1 name-match, nearby-cluster, and unclustered multi-candidate outcomes.
+- Full developer smoke passed with `248 passed`; real-data smoke and Tencent diagnostic probe both completed successfully.
+
 ## 2026-07-17
 
 ### Changed
