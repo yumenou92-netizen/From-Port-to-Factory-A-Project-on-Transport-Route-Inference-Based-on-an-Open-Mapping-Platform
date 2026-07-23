@@ -1,0 +1,512 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
+from typing import Literal, Protocol, Sequence
+
+from src.domain.cost_rules import CostCalculationResult
+from src.domain.freight_rate import create_freight_rate
+from src.domain.route_request import RouteRequest
+from src.routing.shipping_time_provider import ShippingTimeResult
+from src.routing.transport_contracts import CostComponent
+from src.routing.transport_edge import TransportEdge, build_transport_edge
+
+
+InlandWaterwayStatus = Literal["generated", "not_applicable", "manual_review"]
+
+DEMO_INLAND_WATERWAY_RULE_ID = "demo_placeholder_inland_barge_rate_time"
+DEMO_INLAND_WATERWAY_RULE_VERSION = "0.1"
+SUPPORTED_DEMO_INLAND_REGIONS = {"fujian_minjiang", "pearl_river_delta"}
+
+
+class InlandWaterwayProviderError(ValueError):
+    """Raised when inland-waterway interface records are internally inconsistent."""
+
+
+@dataclass(frozen=True)
+class PortCapabilityRecord:
+    """Interface row for a future port capability table.
+
+    The row describes what one physical node can handle. In production this should
+    be keyed by standard node_id; the demo provider also accepts aliases so the
+    interface can be exercised before the formal capability table is complete.
+    """
+
+    node_id: str | None
+    canonical_name: str
+    region_code: str | None
+    can_handle_barge: bool
+    supported_package_types: tuple[str, ...]
+    supported_commodities: tuple[str, ...]
+    source: str
+    aliases: tuple[str, ...] = ()
+    infrastructure_type: str = "unknown"
+    can_receive_bulk_shipping: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "node_id", _optional_text(self.node_id))
+        object.__setattr__(self, "canonical_name", _required_text(self.canonical_name, "港口能力名称"))
+        object.__setattr__(self, "region_code", _optional_text(self.region_code))
+        object.__setattr__(self, "source", _required_text(self.source, "港口能力来源"))
+        object.__setattr__(
+            self,
+            "infrastructure_type",
+            _required_text(self.infrastructure_type, "基础设施类型"),
+        )
+        object.__setattr__(
+            self,
+            "supported_package_types",
+            _normalized_text_tuple(self.supported_package_types, "港口支持包装方式"),
+        )
+        object.__setattr__(
+            self,
+            "supported_commodities",
+            _normalized_text_tuple(self.supported_commodities, "港口支持货物品种"),
+        )
+        object.__setattr__(
+            self,
+            "aliases",
+            _normalized_text_tuple(self.aliases, "港口能力别名", allow_empty=True),
+        )
+        if not isinstance(self.can_handle_barge, bool):
+            raise InlandWaterwayProviderError("can_handle_barge 必须是布尔值。")
+        if not isinstance(self.can_receive_bulk_shipping, bool):
+            raise InlandWaterwayProviderError("can_receive_bulk_shipping 必须是布尔值。")
+
+    def matches(self, *, node_id: str | None, name: str) -> bool:
+        normalized_id = _optional_text(node_id)
+        if self.node_id is not None and normalized_id == self.node_id:
+            return True
+        normalized_name = _required_text(name, "地点名称")
+        candidates = (self.canonical_name, *self.aliases)
+        return any(candidate in normalized_name for candidate in candidates)
+
+    def supports_order(self, request: RouteRequest) -> bool:
+        return (
+            self.can_handle_barge
+            and request.package_type in self.supported_package_types
+            and (
+                request.commodity in self.supported_commodities
+                or "*" in self.supported_commodities
+            )
+        )
+
+
+@dataclass(frozen=True)
+class RegionMappingRecord:
+    """Interface row for mapping nodes/cities to freight and time regions."""
+
+    region_code: str
+    region_name: str
+    city_keywords: tuple[str, ...]
+    port_keywords: tuple[str, ...]
+    source: str
+    bulk_rate_destination_group: str | None = None
+    bulk_time_region: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "region_code", _required_text(self.region_code, "区域编码"))
+        object.__setattr__(self, "region_name", _required_text(self.region_name, "区域名称"))
+        object.__setattr__(self, "source", _required_text(self.source, "区域映射来源"))
+        object.__setattr__(
+            self,
+            "city_keywords",
+            _normalized_text_tuple(self.city_keywords, "区域城市关键词"),
+        )
+        object.__setattr__(
+            self,
+            "port_keywords",
+            _normalized_text_tuple(self.port_keywords, "区域港口关键词"),
+        )
+        object.__setattr__(
+            self,
+            "bulk_rate_destination_group",
+            _optional_text(self.bulk_rate_destination_group),
+        )
+        object.__setattr__(self, "bulk_time_region", _optional_text(self.bulk_time_region))
+
+    def matches(self, name: str) -> bool:
+        normalized_name = _required_text(name, "地点名称")
+        return any(keyword in normalized_name for keyword in (*self.city_keywords, *self.port_keywords))
+
+
+@dataclass(frozen=True)
+class InlandWaterwayRateTimeRecord:
+    """Interface row for inland-waterway barge fee and sailing-time data."""
+
+    region_code: str
+    package_type: str
+    commodity_scope: tuple[str, ...]
+    unit_rate_yuan_per_ton: Decimal
+    duration_hours: Decimal
+    source_type: Literal["real_data", "demo_placeholder"]
+    source: str
+    rule_id: str
+    rule_version: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "region_code", _required_text(self.region_code, "内河航运区域编码"))
+        object.__setattr__(self, "package_type", _required_text(self.package_type, "内河航运包装方式"))
+        object.__setattr__(
+            self,
+            "commodity_scope",
+            _normalized_text_tuple(self.commodity_scope, "内河航运货物范围"),
+        )
+        object.__setattr__(
+            self,
+            "unit_rate_yuan_per_ton",
+            _positive_decimal(self.unit_rate_yuan_per_ton, "内河航运单价"),
+        )
+        object.__setattr__(
+            self,
+            "duration_hours",
+            _positive_decimal(self.duration_hours, "内河航运航行时间"),
+        )
+        if self.source_type not in {"real_data", "demo_placeholder"}:
+            raise InlandWaterwayProviderError(f"不支持的内河航运数据来源类型：{self.source_type}")
+        object.__setattr__(self, "source", _required_text(self.source, "内河航运数据来源"))
+        object.__setattr__(self, "rule_id", _required_text(self.rule_id, "内河航运规则编号"))
+        object.__setattr__(self, "rule_version", _required_text(self.rule_version, "内河航运规则版本"))
+
+    def supports_order(self, request: RouteRequest) -> bool:
+        return (
+            request.quantity_unit == "吨"
+            and request.package_type == self.package_type
+            and (request.commodity in self.commodity_scope or "*" in self.commodity_scope)
+        )
+
+
+@dataclass(frozen=True)
+class InlandWaterwayEdgeResult:
+    status: InlandWaterwayStatus
+    message: str
+    edge: TransportEdge | None = None
+    region_code: str | None = None
+    source_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.status not in {"generated", "not_applicable", "manual_review"}:
+            raise InlandWaterwayProviderError(f"不支持的内河航运结果状态：{self.status}")
+        object.__setattr__(self, "message", _required_text(self.message, "内河航运结果说明"))
+        object.__setattr__(self, "region_code", _optional_text(self.region_code))
+        object.__setattr__(
+            self,
+            "source_refs",
+            _normalized_text_tuple(self.source_refs, "内河航运来源引用", allow_empty=True),
+        )
+        if self.status == "generated" and self.edge is None:
+            raise InlandWaterwayProviderError("generated 结果必须包含 TransportEdge。")
+        if self.status != "generated" and self.edge is not None:
+            raise InlandWaterwayProviderError("非 generated 结果不得包含 TransportEdge。")
+
+    @property
+    def is_generated(self) -> bool:
+        return self.status == "generated"
+
+
+class InlandWaterwayBargeProvider(Protocol):
+    def build_barge_edge(
+        self,
+        *,
+        origin_node_id: str,
+        origin_name: str,
+        destination_node_id: str,
+        destination_name: str,
+        request: RouteRequest,
+    ) -> InlandWaterwayEdgeResult:
+        """Build one barge edge when inland-waterway data is available and applicable."""
+
+
+class DemoInlandWaterwayBargeProvider:
+    """Minimal explicit placeholder provider for Fujian and Pearl Delta barge edges."""
+
+    def __init__(
+        self,
+        *,
+        port_capabilities: Sequence[PortCapabilityRecord] = (),
+        region_mappings: Sequence[RegionMappingRecord] = (),
+        rate_time_records: Sequence[InlandWaterwayRateTimeRecord] = (),
+    ) -> None:
+        self.port_capabilities = tuple(port_capabilities) or DEFAULT_PORT_CAPABILITY_RECORDS
+        self.region_mappings = tuple(region_mappings) or DEFAULT_REGION_MAPPING_RECORDS
+        self.rate_time_records = tuple(rate_time_records) or DEFAULT_INLAND_WATERWAY_RATE_TIME_RECORDS
+
+    def build_barge_edge(
+        self,
+        *,
+        origin_node_id: str,
+        origin_name: str,
+        destination_node_id: str,
+        destination_name: str,
+        request: RouteRequest,
+    ) -> InlandWaterwayEdgeResult:
+        origin_region = self._match_region(origin_name)
+        destination_region = self._match_region(destination_name)
+        if origin_region is None or destination_region is None:
+            return self._not_applicable("仅福建闽江和珠三角内河航运场景生成 demo_placeholder 驳船边；本次起终点未同时匹配到支持区域。")
+        if origin_region.region_code != destination_region.region_code:
+            return self._not_applicable("起点和终点不属于同一内河航运区域，demo_placeholder 驳船边不生成。")
+        if origin_region.region_code not in SUPPORTED_DEMO_INLAND_REGIONS:
+            return self._not_applicable("当前 Demo Provider 仅支持福建闽江和珠三角内河航运区域。")
+
+        origin_capability = self._match_capability(
+            node_id=origin_node_id,
+            name=origin_name,
+            region_code=origin_region.region_code,
+        )
+        destination_capability = self._match_capability(
+            node_id=destination_node_id,
+            name=destination_name,
+            region_code=destination_region.region_code,
+        )
+        if origin_capability is None or destination_capability is None:
+            return self._not_applicable("港口能力表未确认起终点均可形成内河驳船段，demo_placeholder 驳船边不生成。")
+        if not origin_capability.supports_order(request) or not destination_capability.supports_order(request):
+            return self._not_applicable("港口能力表显示起终点不同时支持当前订单包装/品种的驳船作业。")
+
+        rate_time = self._match_rate_time(origin_region.region_code, request)
+        if rate_time is None:
+            return self._not_applicable("内河航运航费/航时表没有匹配当前订单的记录，驳船边不生成。")
+
+        total_cost = rate_time.unit_rate_yuan_per_ton * Decimal(str(request.quantity))
+        price_source = _source_ref(rate_time.source_type, rate_time.source)
+        rate = create_freight_rate(
+            origin_name=origin_name,
+            destination_name=destination_name,
+            transport_mode="驳船",
+            package_type=request.package_type,
+            commodity_scope=request.commodity,
+            raw_price=rate_time.unit_rate_yuan_per_ton,
+            raw_price_unit="元/吨",
+            price_type="unit_price",
+            price_source=price_source,
+            from_node_id=origin_node_id,
+            to_node_id=destination_node_id,
+            source_file=rate_time.source,
+        )
+        cost_result = CostCalculationResult(
+            status="valid",
+            total_cost_yuan=total_cost,
+            rule_id=rate_time.rule_id,
+            rule_version=rate_time.rule_version,
+            calculation_detail=(
+                f"demo_placeholder 内河驳船：{rate_time.unit_rate_yuan_per_ton}元/吨×"
+                f"{request.quantity}{request.quantity_unit}={total_cost}元；"
+                f"区域={origin_region.region_name}。"
+            ),
+            price_source=price_source,
+            transport_mode="驳船",
+            rate_packaging=request.package_type,
+            price_unit="元/吨",
+            message="已生成明确标记的 demo_placeholder 内河驳船航费。",
+        )
+        time_result = ShippingTimeResult(
+            status="resolved",
+            duration_hours=rate_time.duration_hours,
+            source=price_source,
+            message=(
+                "已生成明确标记的 demo_placeholder 内河驳船纯航行时间；"
+                "不含等待、装卸、港口作业、堆存和短倒时间。"
+            ),
+            stage=f"{origin_name}至{destination_name}",
+            transport_mode="驳船",
+            input_value=str(rate_time.duration_hours),
+            input_unit="小时",
+            time_scope="pure_sailing",
+        )
+        cost_component = CostComponent(
+            component_type="barge_freight",
+            amount_yuan=total_cost,
+            source_type=rate_time.source_type,
+            source=rate_time.source,
+            rule_id=rate_time.rule_id,
+            rule_version=rate_time.rule_version,
+            calculation_detail=cost_result.calculation_detail,
+        )
+        edge = build_transport_edge(
+            rate,
+            cost_result,
+            time_result,
+            commodity=request.commodity,
+            data_source=price_source,
+            transport_stage="barge_last_mile",
+            cost_components=(cost_component,),
+        )
+        if not edge.is_available:
+            return InlandWaterwayEdgeResult(
+                status="manual_review",
+                edge=None,
+                message=f"内河驳船 demo_placeholder 边未通过 TransportEdge 校验：{edge.unavailable_reason}",
+                region_code=origin_region.region_code,
+                source_refs=(origin_region.source, origin_capability.source, destination_capability.source, rate_time.source),
+            )
+        return InlandWaterwayEdgeResult(
+            status="generated",
+            edge=edge,
+            message="已生成明确 demo_placeholder 内河驳船边。",
+            region_code=origin_region.region_code,
+            source_refs=(origin_region.source, origin_capability.source, destination_capability.source, rate_time.source),
+        )
+
+    def _match_region(self, name: str) -> RegionMappingRecord | None:
+        matches = [record for record in self.region_mappings if record.matches(name)]
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
+    def _match_capability(
+        self,
+        *,
+        node_id: str | None,
+        name: str,
+        region_code: str,
+    ) -> PortCapabilityRecord | None:
+        matches = [
+            record
+            for record in self.port_capabilities
+            if record.region_code == region_code and record.matches(node_id=node_id, name=name)
+        ]
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
+    def _match_rate_time(
+        self,
+        region_code: str,
+        request: RouteRequest,
+    ) -> InlandWaterwayRateTimeRecord | None:
+        matches = [
+            record
+            for record in self.rate_time_records
+            if record.source_type == "demo_placeholder"
+            and record.region_code == region_code
+            and record.supports_order(request)
+        ]
+        if len(matches) != 1:
+            return None
+        return matches[0]
+
+    @staticmethod
+    def _not_applicable(message: str) -> InlandWaterwayEdgeResult:
+        return InlandWaterwayEdgeResult(status="not_applicable", edge=None, message=message)
+
+
+def _required_text(value: object, field_name: str) -> str:
+    text = str(value).strip() if value is not None else ""
+    if not text:
+        raise InlandWaterwayProviderError(f"{field_name}不能为空。")
+    return text
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalized_text_tuple(
+    values: Sequence[object],
+    field_name: str,
+    *,
+    allow_empty: bool = False,
+) -> tuple[str, ...]:
+    try:
+        normalized = tuple(_required_text(value, field_name) for value in values)
+    except TypeError:
+        raise InlandWaterwayProviderError(f"{field_name}必须是可迭代文本。") from None
+    if not normalized and not allow_empty:
+        raise InlandWaterwayProviderError(f"{field_name}不能为空。")
+    return tuple(dict.fromkeys(normalized))
+
+
+def _positive_decimal(value: object, field_name: str) -> Decimal:
+    if value is None or isinstance(value, bool):
+        raise InlandWaterwayProviderError(f"{field_name}必须是大于 0 的有限数值。")
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, AttributeError):
+        raise InlandWaterwayProviderError(f"{field_name}必须是大于 0 的有限数值。") from None
+    if not number.is_finite() or number <= 0:
+        raise InlandWaterwayProviderError(f"{field_name}必须是大于 0 的有限数值。")
+    return number
+
+
+def _source_ref(source_type: str, source: str) -> str:
+    normalized_source = _required_text(source, "来源")
+    prefix = f"{source_type}:"
+    return normalized_source if normalized_source.startswith(prefix) else f"{prefix}{normalized_source}"
+
+
+DEFAULT_REGION_MAPPING_RECORDS = (
+    RegionMappingRecord(
+        region_code="fujian_minjiang",
+        region_name="福建闽江内河",
+        city_keywords=("福州", "马尾", "闽江"),
+        port_keywords=("马尾港", "马尾"),
+        bulk_rate_destination_group="马尾",
+        bulk_time_region="福建",
+        source="demo_placeholder:region_mapping:fujian_minjiang",
+    ),
+    RegionMappingRecord(
+        region_code="pearl_river_delta",
+        region_name="珠三角内河",
+        city_keywords=("广州", "深圳", "东莞"),
+        port_keywords=("广州新港", "黄埔", "深圳蛇口", "蛇口", "东莞新沙", "新沙", "麻涌"),
+        bulk_rate_destination_group="珠三角",
+        bulk_time_region="珠三角",
+        source="demo_placeholder:region_mapping:pearl_river_delta",
+    ),
+)
+
+DEFAULT_PORT_CAPABILITY_RECORDS = (
+    PortCapabilityRecord(
+        node_id=None,
+        canonical_name="福建闽江内河 Demo 能力",
+        region_code="fujian_minjiang",
+        can_handle_barge=True,
+        supported_package_types=("散粮",),
+        supported_commodities=("*",),
+        source="demo_placeholder:port_capability:fujian_minjiang",
+        aliases=("福州", "马尾", "闽江"),
+        infrastructure_type="sea_river_integrated_port_or_customer_terminal",
+        can_receive_bulk_shipping=True,
+    ),
+    PortCapabilityRecord(
+        node_id=None,
+        canonical_name="珠三角内河 Demo 能力",
+        region_code="pearl_river_delta",
+        can_handle_barge=True,
+        supported_package_types=("散粮",),
+        supported_commodities=("*",),
+        source="demo_placeholder:port_capability:pearl_river_delta",
+        aliases=("广州", "深圳", "东莞", "黄埔", "蛇口", "新沙", "麻涌"),
+        infrastructure_type="sea_river_integrated_port_or_customer_terminal",
+        can_receive_bulk_shipping=True,
+    ),
+)
+
+DEFAULT_INLAND_WATERWAY_RATE_TIME_RECORDS = (
+    InlandWaterwayRateTimeRecord(
+        region_code="fujian_minjiang",
+        package_type="散粮",
+        commodity_scope=("*",),
+        unit_rate_yuan_per_ton=Decimal("12"),
+        duration_hours=Decimal("8"),
+        source_type="demo_placeholder",
+        source="demo_placeholder:inland_barge_rate_time:fujian_minjiang",
+        rule_id=DEMO_INLAND_WATERWAY_RULE_ID,
+        rule_version=DEMO_INLAND_WATERWAY_RULE_VERSION,
+    ),
+    InlandWaterwayRateTimeRecord(
+        region_code="pearl_river_delta",
+        package_type="散粮",
+        commodity_scope=("*",),
+        unit_rate_yuan_per_ton=Decimal("10"),
+        duration_hours=Decimal("6"),
+        source_type="demo_placeholder",
+        source="demo_placeholder:inland_barge_rate_time:pearl_river_delta",
+        rule_id=DEMO_INLAND_WATERWAY_RULE_ID,
+        rule_version=DEMO_INLAND_WATERWAY_RULE_VERSION,
+    ),
+)

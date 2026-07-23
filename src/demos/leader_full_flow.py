@@ -5,6 +5,7 @@ import math
 import sys
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
+from pathlib import Path
 from typing import Callable, Sequence
 
 from src.data.loaders import (
@@ -15,6 +16,13 @@ from src.data.loaders import (
     make_node_id,
 )
 from src.domain.cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
+from src.routing.bulk_shipping_provider import (
+    BulkShippingWorkbook,
+    make_bulk_shipping_cost_component,
+    make_bulk_shipping_cost_result,
+    make_bulk_shipping_rate,
+    make_bulk_shipping_time_result,
+)
 from src.domain.freight_rate import FreightRate, create_freight_rate
 from src.domain.latest_rate_selector import select_latest_freight_rates
 from src.domain.node_registry import NodeRegistry, build_node_registry, normalize_lookup_name
@@ -33,16 +41,17 @@ from src.routing.transport_edge import TransportEdge, build_transport_edge, make
 from src.routing.transport_graph import build_transport_multidigraph
 
 
-ORDER_QUANTITY = Decimal("500")
+ORDER_QUANTITY = Decimal("2450")
 ORDER_QUANTITY_UNIT = "吨"
 ORDER_PACKAGE_TYPE = "散粮"
-ORDER_COMMODITY = "玉米"
-MAX_TRANSFER_PORTS = 3
+ORDER_COMMODITY = "小麦"
+MAX_TRANSFER_PORTS = 5
 
 SOURCE_REAL_DATA = "real_business_data"
 SOURCE_TENCENT = "tencent_map"
 SOURCE_CONFIRMED_RULE = "confirmed_cost_rule"
 SOURCE_DEMO_PLACEHOLDER = "demo_placeholder"
+SOURCE_CONFIRMED_TIME = "confirmed_pure_sailing_time"
 
 
 class FullFlowDemoError(RuntimeError):
@@ -92,6 +101,7 @@ class FullFlowDemoResult:
     edge_sources: dict[str, EdgeSourceTrace]
     warnings: tuple[str, ...]
     additional_fee_count: int
+    trunk_edge_count: int
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -135,6 +145,7 @@ def build_full_flow_demo(
     coordinate_provider: CoordinateProvider,
     road_route_provider: RoadRouteProvider,
     candidate_limit: int = MAX_TRANSFER_PORTS,
+    bulk_workbook: BulkShippingWorkbook | None = None,
 ) -> FullFlowDemoResult:
     request = RouteRequest(
         quantity=ORDER_QUANTITY,
@@ -170,12 +181,19 @@ def build_full_flow_demo(
     if not candidate_ports:
         raise FullFlowDemoError("真实运价始发端中没有可用于本次订单的候选南港节点。")
 
+    bulk_workbook = bulk_workbook or BulkShippingWorkbook.load(
+        _find_bulk_shipping_workbook(bundle.data_dir)
+    )
     edges: list[TransportEdge] = []
     edge_sources: dict[str, EdgeSourceTrace] = {}
     warnings: list[str] = []
     usable_ports: list[TransferPort] = []
 
-    for rank, port in enumerate(candidate_ports):
+    for port in candidate_ports:
+        trunk_match = bulk_workbook.match(port.name, request)
+        if not trunk_match.is_resolved:
+            warnings.append(f"候选节点 {port.name} 未形成散船干线段：{trunk_match.message}")
+            continue
         road_result = road_route_provider.get_route(
             RoadRouteRequest(origin=port.point, destination=destination_point)
         )
@@ -183,11 +201,12 @@ def build_full_flow_demo(
             warnings.append(f"候选节点 {port.name} 未形成道路运输段：{road_result.message}")
             continue
 
-        trunk_edge = _build_demo_trunk_edge(
+        trunk_edge = _build_real_trunk_edge(
+            origin.canonical_name or origin.query_name,
             origin_node_id,
             port,
             request,
-            DEMO_TRUNK_PROFILES[rank % len(DEMO_TRUNK_PROFILES)],
+            bulk_workbook,
         )
         last_mile_edge, source_trace = _build_last_mile_edge(
             port,
@@ -201,8 +220,8 @@ def build_full_flow_demo(
         usable_ports.append(port)
         edge_sources[trunk_edge.edge_id] = EdgeSourceTrace(
             edge_id=trunk_edge.edge_id,
-            labels=(SOURCE_DEMO_PLACEHOLDER,),
-            explanation="北港至南港正式船运费用和时间尚缺，使用独立演示占位值。",
+            labels=(SOURCE_REAL_DATA, SOURCE_CONFIRMED_TIME),
+            explanation="费用来自真实散船运价表最新行；时间按领导确认分区纯航行天数换算为小时。",
         )
         edge_sources[last_mile_edge.edge_id] = source_trace
 
@@ -237,6 +256,7 @@ def build_full_flow_demo(
         edge_sources=edge_sources,
         warnings=tuple(warnings),
         additional_fee_count=len(bundle.additional_fees),
+        trunk_edge_count=len(usable_ports),
     )
 
 
@@ -382,6 +402,40 @@ def _build_demo_trunk_edge(
     )
 
 
+def _build_real_trunk_edge(
+    origin_name: str,
+    origin_node_id: str,
+    port: TransferPort,
+    request: RouteRequest,
+    workbook: BulkShippingWorkbook,
+) -> TransportEdge:
+    match = workbook.match(port.name, request)
+    if not match.is_resolved:
+        raise FullFlowDemoError(f"候选节点 {port.name} 未形成散船干线段：{match.message}")
+    rate = make_bulk_shipping_rate(
+        origin_name,
+        origin_node_id,
+        port.name,
+        port.node_id,
+        request,
+        match,
+    )
+    cost_result = make_bulk_shipping_cost_result(request, match)
+    time_result = make_bulk_shipping_time_result(port.name, match)
+    edge = build_transport_edge(
+        rate,
+        cost_result,
+        time_result,
+        commodity=request.commodity,
+        data_source="real_business_data:bulk_shipping_workbook",
+        transport_stage="bulk_shipping_trunk",
+        cost_components=(make_bulk_shipping_cost_component(match),),
+    )
+    if not edge.is_available:
+        raise FullFlowDemoError(f"候选节点 {port.name} 未形成可搜索散船干线边：{edge.unavailable_reason}")
+    return edge
+
+
 def _build_last_mile_edge(
     port: TransferPort,
     destination_node_id: str,
@@ -479,7 +533,7 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
     candidate_count = len(result.candidate_ports)
     print(
         f"候选南港={candidate_count} 个；本次搜索图运输边={result.graph_edge_count} 条"
-        f"（散船干线占位边={candidate_count} 条；南港至客户汽运边={candidate_count} 条）"
+        f"（真实散船干线边={result.trunk_edge_count} 条；南港至客户汽运边={candidate_count} 条）"
     )
     print(
         f"AdditionalFee 原始记录={result.additional_fee_count} 条"
@@ -508,13 +562,14 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
         == result.recommendations.fastest_time.path_node_ids
     ):
         print(
-            "\n说明：在本次候选范围和当前散船干线占位参数下，"
+            "\n说明：在本次候选范围和当前真实散船干线参数下，"
             "费用最低与时间最短指向同一条物理路线；两项目标仍由系统独立搜索。"
         )
 
     print("\n三、测试版数据边界说明")
-    print("- 真实输入与规则：本地标准节点和已维护汽运价可用时优先采用；道路距离和驾车时间来自腾讯地图；陌生汽运使用已确认规则。")
-    print("- 演示占位数据：仅北港至候选南港的散船干线费用、纯航行时间，以及客户无自有码头画像。")
+    print("- 真实输入与规则：本地标准节点、真实散船运价表、已维护汽运价可用时优先采用；道路距离和驾车时间来自腾讯地图；陌生汽运使用已确认规则。")
+    print("- 领导确认规则：北港至南港纯航行时间按南港分区天数换算为小时。")
+    print("- 演示占位数据：仅客户无自有码头画像。")
     print("- 暂未计入：AdditionalFee 仅完成原始记录加载；逐条适用条件未确认前不计入，也不解释为 0。")
     for warning in result.warnings:
         print(f"- 运行提示：{warning}")
@@ -540,6 +595,11 @@ def _print_route(route: RouteResult, result: FullFlowDemoResult) -> None:
         )
         print(f"     数据口径={labels}；{source.explanation}")
         print(f"     计费规则={segment.cost_rule_id}/{segment.cost_rule_version}")
+    if _route_has_vessel_time_gap(route):
+        print(
+            "  时效隐患提示：本路线包含船运段；当前船运时间仅覆盖已确认的散船干线纯航行时间，"
+            "未包含等待、装船、卸船、港口作业、堆存、短倒等时间；驳船航时尚无正式数据源。"
+        )
 
 
 def _print_cost_breakdown(route: RouteResult, result: FullFlowDemoResult) -> None:
@@ -567,6 +627,7 @@ def _source_label_text(label: str) -> str:
         SOURCE_TENCENT: "腾讯地图",
         SOURCE_CONFIRMED_RULE: "已确认计费规则",
         SOURCE_DEMO_PLACEHOLDER: "演示占位数据",
+        SOURCE_CONFIRMED_TIME: "已确认纯航行时效",
     }[label]
 
 
@@ -584,6 +645,10 @@ def _transport_mode_text(transport_mode: str) -> str:
     return transport_mode
 
 
+def _route_has_vessel_time_gap(route: RouteResult) -> bool:
+    return any(segment.transport_mode in {"散船", "驳船"} for segment in route.segments)
+
+
 def _format_decimal(value: Decimal, *, places: int = 2) -> str:
     quantum = Decimal("1").scaleb(-places)
     formatted = format(value.quantize(quantum, rounding=ROUND_HALF_UP), "f")
@@ -596,6 +661,15 @@ def _real_rate_source(rate: FreightRate) -> str:
     if rate.source_file and rate.source_row_number is not None:
         return f"real_business_data:{rate.source_file}#row={rate.source_row_number}"
     return "real_business_data:maintained_freight_rate"
+
+
+def _find_bulk_shipping_workbook(data_dir: Path) -> Path:
+    matches = sorted(data_dir.rglob("散船运价表.xlsx"))
+    if not matches:
+        raise FullFlowDemoError("DATA_DIR 下缺少散船运价表.xlsx，不能替换散船干线占位。")
+    if len(matches) > 1:
+        raise FullFlowDemoError("DATA_DIR 下存在多个散船运价表.xlsx，请先明确散船运价来源。")
+    return matches[0]
 
 
 def _require_coordinate(result: CoordinateResolution, label: str) -> CoordinateResolution:

@@ -194,6 +194,7 @@ Current disabled rule groups:
 Current files:
 
 - `src/routing/shipping_time_provider.py`
+- `src/routing/inland_waterway_provider.py`
 - `src/geo/distance_provider.py`
 - `src/geo/tencent_map_provider.py`
 
@@ -215,6 +216,8 @@ Current state:
 - `build_transport_edge()` combines resolved shipping time with freight-rate and cost results;
 - the real-data `EdgeCandidate` bridge accepts explicit manual time for integration validation; a formal business shipping-time source is still missing;
 - Tencent Maps must not be called directly from cost rules.
+- `routing/inland_waterway_provider.py` defines the next data interfaces for port capabilities, regional mappings, and inland-waterway barge fee/time records; its first Provider is demo-only and generates explicit `demo_placeholder` barge edges only for same-region Fujian/Minjiang or Pearl Delta bulk-grain scenarios.
+- Inland-waterway barge Provider output uses `transport_stage=barge_last_mile` and `time_scope=pure_sailing`; formal barge data must replace the demo records before these edges are treated as real business data.
 
 ### Customer Rule Layer
 

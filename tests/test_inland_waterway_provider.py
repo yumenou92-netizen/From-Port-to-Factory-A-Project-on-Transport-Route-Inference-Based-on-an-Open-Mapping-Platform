@@ -1,0 +1,177 @@
+from decimal import Decimal
+
+from src.domain.route_request import RouteRequest
+from src.routing.inland_waterway_provider import (
+    DemoInlandWaterwayBargeProvider,
+    InlandWaterwayRateTimeRecord,
+    PortCapabilityRecord,
+    RegionMappingRecord,
+)
+
+
+def test_demo_provider_generates_fujian_placeholder_barge_edge():
+    result = DemoInlandWaterwayBargeProvider().build_barge_edge(
+        origin_node_id="node-mawei",
+        origin_name="马尾港",
+        destination_node_id="node-fuzhou-customer",
+        destination_name="福州客户码头",
+        request=make_request(),
+    )
+
+    assert result.status == "generated"
+    assert result.region_code == "fujian_minjiang"
+    assert result.edge is not None
+    assert result.edge.transport_mode == "驳船"
+    assert result.edge.transport_stage == "barge_last_mile"
+    assert result.edge.time_scope == "pure_sailing"
+    assert result.edge.cost_yuan == Decimal("29400")
+    assert result.edge.time_hours == Decimal("8")
+    assert result.edge.cost_rule_id == "demo_placeholder_inland_barge_rate_time"
+    assert result.edge.price_source.startswith("demo_placeholder:")
+    assert result.edge.data_source.startswith("demo_placeholder:")
+    assert result.edge.cost_components[0].is_demo_placeholder
+
+
+def test_demo_provider_generates_pearl_delta_placeholder_barge_edge():
+    result = DemoInlandWaterwayBargeProvider().build_barge_edge(
+        origin_node_id="node-guangzhou",
+        origin_name="广州新港",
+        destination_node_id="node-dongguan-customer",
+        destination_name="东莞客户码头",
+        request=make_request(),
+    )
+
+    assert result.status == "generated"
+    assert result.region_code == "pearl_river_delta"
+    assert result.edge is not None
+    assert result.edge.cost_yuan == Decimal("24500")
+    assert result.edge.time_hours == Decimal("6")
+    assert result.edge.cost_components[0].source_type == "demo_placeholder"
+
+
+def test_demo_provider_does_not_generate_for_other_regions():
+    result = DemoInlandWaterwayBargeProvider().build_barge_edge(
+        origin_node_id="node-qinzhou",
+        origin_name="钦州港",
+        destination_node_id="node-guangxi-customer",
+        destination_name="广西客户码头",
+        request=make_request(),
+    )
+
+    assert result.status == "not_applicable"
+    assert result.edge is None
+    assert "福建闽江和珠三角" in result.message
+
+
+def test_demo_provider_does_not_generate_across_two_supported_regions():
+    result = DemoInlandWaterwayBargeProvider().build_barge_edge(
+        origin_node_id="node-mawei",
+        origin_name="马尾港",
+        destination_node_id="node-guangzhou",
+        destination_name="广州客户码头",
+        request=make_request(),
+    )
+
+    assert result.status == "not_applicable"
+    assert result.edge is None
+    assert "不属于同一内河航运区域" in result.message
+
+
+def test_demo_provider_requires_supported_package_and_quantity_unit():
+    result = DemoInlandWaterwayBargeProvider().build_barge_edge(
+        origin_node_id="node-guangzhou",
+        origin_name="广州新港",
+        destination_node_id="node-dongguan-customer",
+        destination_name="东莞客户码头",
+        request=RouteRequest(
+            quantity=500,
+            quantity_unit="箱",
+            package_type="集装箱",
+            commodity="玉米",
+        ),
+    )
+
+    assert result.status == "not_applicable"
+    assert result.edge is None
+    assert "包装/品种" in result.message or "航费/航时表" in result.message
+
+
+def test_demo_provider_does_not_emit_real_data_barge_edges():
+    provider = DemoInlandWaterwayBargeProvider(
+        rate_time_records=(
+            InlandWaterwayRateTimeRecord(
+                region_code="pearl_river_delta",
+                package_type="散粮",
+                commodity_scope=("*",),
+                unit_rate_yuan_per_ton=Decimal("9"),
+                duration_hours=Decimal("5"),
+                source_type="real_data",
+                source="future_real_inland_waterway.csv#row=1",
+                rule_id="future_real_rule",
+                rule_version="1.0",
+            ),
+        )
+    )
+
+    result = provider.build_barge_edge(
+        origin_node_id="node-guangzhou",
+        origin_name="广州新港",
+        destination_node_id="node-dongguan-customer",
+        destination_name="东莞客户码头",
+        request=make_request(),
+    )
+
+    assert result.status == "not_applicable"
+    assert result.edge is None
+    assert "航费/航时表" in result.message
+
+
+def test_region_mapping_and_capability_records_define_future_table_contract():
+    region = RegionMappingRecord(
+        region_code="pearl_river_delta",
+        region_name="珠三角内河",
+        city_keywords=("广州", "深圳", "东莞"),
+        port_keywords=("黄埔", "蛇口"),
+        bulk_rate_destination_group="珠三角",
+        bulk_time_region="珠三角",
+        source="demo_placeholder:region_mapping",
+    )
+    capability = PortCapabilityRecord(
+        node_id="node-guangzhou",
+        canonical_name="广州新港",
+        region_code="pearl_river_delta",
+        can_handle_barge=True,
+        supported_package_types=("散粮",),
+        supported_commodities=("*",),
+        source="demo_placeholder:port_capability",
+        infrastructure_type="seaport",
+        can_receive_bulk_shipping=True,
+    )
+    rate_time = InlandWaterwayRateTimeRecord(
+        region_code="pearl_river_delta",
+        package_type="散粮",
+        commodity_scope=("玉米",),
+        unit_rate_yuan_per_ton=Decimal("9"),
+        duration_hours=Decimal("5"),
+        source_type="demo_placeholder",
+        source="demo_placeholder:inland_barge_rate_time",
+        rule_id="demo_placeholder_test",
+        rule_version="0.1",
+    )
+
+    assert region.matches("广州客户码头")
+    assert capability.matches(node_id="node-guangzhou", name="任意名称")
+    assert capability.infrastructure_type == "seaport"
+    assert capability.can_receive_bulk_shipping
+    assert capability.supports_order(make_request(commodity="小麦"))
+    assert rate_time.supports_order(make_request(commodity="玉米"))
+    assert not rate_time.supports_order(make_request(commodity="小麦"))
+
+
+def make_request(*, commodity: str = "小麦") -> RouteRequest:
+    return RouteRequest(
+        quantity=Decimal("2450"),
+        quantity_unit="吨",
+        package_type="散粮",
+        commodity=commodity,
+    )

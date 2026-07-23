@@ -2,6 +2,29 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-07-23
+
+### Changed
+
+- Recorded the latest user PyCharm full-flow acceptance for Phase 17 and marked the phase as completed in project planning state.
+- Recorded the Phase 18 B1 business baseline: bulk shipping rates are yuan per ton, apply to all project north ports, calculate as rate times order tons, exclude port operation fees, and ignore tax handling.
+- Clarified that non-Guangdong/Guangxi/Fujian/Hainan destination columns in the bulk shipping workbook stay out of the current route engine scope.
+- Clarified the first south-port operation-fee integration target as one aggregate `码头作业费` component in yuan per ton, with Provider/CSV structure reserved for later fee breakdowns.
+- Added a real bulk-shipping workbook provider that reads the latest row from `散船运价表.xlsx`, preserves parallel destination/vessel columns, selects the smallest vessel that can cover the order tonnage, and calculates trunk freight as yuan-per-ton times order tons.
+- Replaced `leader_full_flow` north-to-south trunk cost/time placeholders with real bulk-shipping freight and confirmed pure-sailing regional time; candidates without confirmed sea-shipping destination/time mapping are excluded with an explicit warning.
+- Recorded the automatic-candidate boundary and future manual south-port mode: auto mode must not treat inland ports as north-to-south sea-shipping destinations; user-specified south ports will become fixed trunk segments outside the north-to-south candidate graph.
+- Recorded the vessel-time data gap as a durable project constraint and added a route warning when recommendations contain vessel segments: current bulk-shipping time is pure sailing only, while barge, operation, waiting, loading, unloading, storage, and short-transfer times remain unavailable.
+- Recorded the inland-waterway business boundary: only Fujian/Minjiang and Pearl Delta inland-waterway scenarios are considered; 300 km truck pre-filtering is not a project rule.
+- Added data interface records for port capabilities, regional mappings, and inland-waterway barge fee/time sources.
+- Added `DemoInlandWaterwayBargeProvider`, which generates explicit `demo_placeholder` barge edges only for same-region Fujian/Minjiang or Pearl Delta bulk-grain scenarios and otherwise produces no edge.
+
+### Verification
+
+- Focused bulk-shipping and full-flow tests passed: `11 passed in 0.30s`.
+- Real-data smoke was intentionally skipped for this increment; a no-network read-only probe confirmed the real workbook loads and distinguishes confirmed sea-shipping destinations from unmatched inland candidates.
+- Focused full-flow warning regression passed after the vessel-time boundary update.
+- Focused inland-waterway Provider tests passed: `6 passed in 0.07s`.
+
 ## 2026-07-22
 
 ### Changed

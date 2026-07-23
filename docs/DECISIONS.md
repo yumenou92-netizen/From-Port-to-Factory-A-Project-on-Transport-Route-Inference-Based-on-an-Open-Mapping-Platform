@@ -2,7 +2,7 @@
 
 This document records durable business and technical decisions. Add new decisions when rules change.
 
-Updated: 2026-07-21
+Updated: 2026-07-23
 
 ## D-001: Prototype Scope
 
@@ -578,3 +578,105 @@ Implications:
 - `demo_placeholder` is a source type, not a formal-data fallback.
 - `ManualReviewOutcome` carries a stable reason code, source reference, explanation, and owning work package; any such result keeps the edge out of the searchable graph.
 - `TransportEdge.edge_id` includes stage, time scope, cost-component trace, and manual-review trace so semantically different parallel candidates do not collide.
+
+## D-030: Phase 18 Bulk Shipping B1 Business Baseline
+
+Date: 2026-07-23
+
+Decision:
+
+For Phase 18, `data_REAL/fee_switch/散船运价表.xlsx` is the confirmed source for north-port-to-south-port bulk grain shipping unit freight. Its prices are yuan per ton. The formal bulk shipping segment cost is `quoted_rate_yuan_per_ton * order_weight_tons`.
+
+The workbook represents freight only: it does not include south-port operation fees, and tax handling is out of scope for this project version. The rates apply to all project north ports; for this project, other north ports have the same applicability as 北良港. Destination columns outside Guangdong, Guangxi, Fujian, and Hainan are not part of the current project scope and must not be read into the route engine or modified.
+
+South-port operation fees are a separate cost component. The first implementation uses one aggregate fee type, `码头作业费`, with unit yuan per ton. The provider interface must allow later CSV-backed breakdowns such as unloading fees, storage fees, and short-transfer fees, but unprovided or unattributed operation fees still must not default to zero.
+
+Reason:
+
+These confirmations remove the blocking ambiguity around rate unit, cost formula, north-port scope, freight-vs-operation-fee boundary, and tax handling. They also expand the implementation target from a small pilot set to full real-business coverage for all relevant south ports in the project test range.
+
+Implications:
+
+- W2 can implement a real bulk-shipping XLSX loader using yuan-per-ton rates and order tonnage without additional tax logic.
+- W2 must preserve the latest-date, destination-group, and vessel-type source trace, while skipping out-of-scope destination columns.
+- W3 must audit and maintain mappings for all relevant south ports in the project scope, not only a 3-to-5-port pilot.
+- W5 must model `码头作业费` as a separate `CostComponent` through a provider; it is not part of the bulk shipping freight quote.
+- `AdditionalFee` raw records remain excluded until they can be mapped to stage, fee type, unit, applicability, and duplicate rules. B1 confirms the target operation-fee shape, not automatic use of the existing 18 raw records.
+- Formal mode must return `manual_review` for missing rate, missing mapping, unknown vessel eligibility, or missing operation-fee attribution. Demo placeholders remain allowed only when explicitly marked `demo_placeholder`.
+
+## D-031: Bulk Shipping Candidate Eligibility and Manual South-Port Mode
+
+Date: 2026-07-23
+
+Decision:
+
+In automatic recommendation mode, a candidate south-port node can receive a north-to-south bulk-shipping trunk edge only when it is eligible for sea-going bulk grain shipping and can be mapped to a confirmed bulk-rate destination group and pure-sailing time region. Inland ports, rail stations, factories, warehouses, or unmatched nodes must not receive synthetic north-to-south sea-shipping edges merely because they appear as origins in maintained last-mile truck rates.
+
+If the user explicitly specifies a south port, the north-port-to-south-port trunk segment is treated as a fixed user-selected segment: calculate its freight and pure-sailing time directly, then reduce the graph search problem to south-port-to-customer routing. The fixed trunk segment is added back into the final total and explanation, but it does not compete against other south ports inside the graph.
+
+Reason:
+
+Some maintained south-port-to-customer truck-rate origins are inland ports or non-seaport facilities. They are valid for last-mile or regional transfer, but they cannot receive sea-going cargo from a north port. Separating automatic eligibility from manual south-port selection prevents physically invalid candidates while preserving a leader-facing workflow where a known business south port can be evaluated directly.
+
+Implications:
+
+- Automatic full-flow must exclude candidates that lack confirmed bulk-shipping destination/time mapping and report the exclusion reason.
+- Node profiles remain the target long-term source for infrastructure type, capabilities, standard location, rate destination group, and pure-sailing time region.
+- Name-based rules in interim code are only a transition mechanism until node profiles are fully maintained; missing or ambiguous mapping must not be silently guessed.
+- Manual south-port mode is a separate implementation path and should not be emulated by adding zero-cost or forced edges into the north-to-south candidate graph.
+
+## D-032: Vessel-Time Data Boundary Warning
+
+Date: 2026-07-23
+
+Decision:
+
+The only vessel-time standard currently confirmed for route search is the north-port-to-south-port bulk-shipping pure-sailing regional rule. Barge sailing time, railway time, port operation time, waiting time, loading time, unloading time, storage time, and short-transfer time are not available as formal data sources in the current prototype.
+
+Any route output that includes a vessel segment must warn that the vessel time is incomplete: bulk-shipping trunk time is pure sailing only, and other vessel-related time categories remain missing unless a future provider explicitly supplies them.
+
+Reason:
+
+Without this warning, users may incorrectly interpret route total time as door-to-door operational time. The current route time is useful for comparing the implemented prototype options, but it is not a complete ETA for execution or production dispatch.
+
+Implications:
+
+- `leader_full_flow` must display a time-risk warning when recommended paths include bulk shipping or future barge segments.
+- Future barge/rail/operation-time providers must preserve `time_scope` and source trace separately from pure sailing and road driving.
+- Missing vessel or operation time must remain missing/manual-review; it must not be defaulted to zero or hidden inside another segment.
+
+## D-033: Inland Waterway Scope, Port Capability, And Regional Mapping
+
+Date: 2026-07-23
+
+Decision:
+
+For the current prototype, inland-waterway transport is only considered in two business regions:
+
+1. Fujian inland waterway centered on 马尾港 and the 闽江 channel;
+2. Pearl Delta inland waterway centered on Guangzhou, Shenzhen, and Dongguan sea-river integrated ports and the 东江/西江 channel system.
+
+Other regions must not automatically generate inland-waterway barge edges.
+
+Port-to-port connectivity is graph connectivity: a transport edge may exist only when the two endpoint nodes have compatible transport stage, cargo handling capability, packaging, and commodity capability. Geography alone is not enough to connect two ports by sea or inland waterway.
+
+North-port-to-south-port bulk-shipping freight and pure-sailing time continue to use confirmed mapping logic: map a south-port node to a destination freight group and time region by its city/nearby regional label, using the nearest reasonable business mapping when the port itself is not a direct workbook column. This mapping must be traceable and must not silently classify unmatched inland ports, rail stations, factories, or warehouses as sea-going bulk-shipping destinations.
+
+Inland-waterway barge freight and sailing-time data are recognized as future formal data sources, but they are not yet loaded from a real table. Until formal records exist, a demo Provider may generate barge edges only in the two supported regions above, and every generated fee/time component must be marked `demo_placeholder`.
+
+For this model version, customer factory and customer terminal are treated as the same delivery endpoint unless a later formal customer-terminal table provides a distinct node.
+
+The previously discussed "within 300 km use truck" idea is not a project rule and must not be implemented as a hard pre-filter. If truck is cheaper or faster, the independent cost/time search should select it from available edges.
+
+Reason:
+
+Leadership clarified that inland-waterway capability is region-specific and cargo-form-specific. A last-mile origin that appears in a maintained truck rate may be a valid inland port or terminal, but that does not prove it can receive north-port sea-going bulk cargo or connect by barge to a customer. The model therefore needs explicit port capabilities, regional mappings, and barge fee/time records before inland-waterway edges can be safely generalized.
+
+Implications:
+
+- Add and maintain three explicit data interfaces: port capability table, regional mapping table, and inland-waterway barge fee/time table.
+- Port capability records must express supported stages and supported cargo/packaging capability before they create graph connectivity.
+- Regional mapping records must keep the source and destination group/time-region trace used for bulk-shipping or inland-waterway lookup.
+- Inland-waterway fee/time records must preserve cost unit, time scope, rule id/version, and source type.
+- Demo barge edges are allowed only for Fujian/闽江 and Pearl Delta cases and must use `transport_stage=barge_last_mile`, explicit `demo_placeholder` fee/time sources, and non-zero positive cost/time.
+- Missing inland-waterway capability, unmatched region, cross-region endpoints, unsupported package/commodity, or absent fee/time record means no barge edge is generated; the system must not create a zero-cost or guessed edge.
