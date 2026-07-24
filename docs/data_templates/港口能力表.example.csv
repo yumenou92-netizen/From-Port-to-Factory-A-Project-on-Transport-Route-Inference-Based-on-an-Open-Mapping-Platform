@@ -1,0 +1,3 @@
+标准节点ID,港口名称,区域编码,基础设施类型,可接收北港散船,可生成内河驳船边,支持包装方式,支持品种,支持运输方式,城市,航运时效区,确认状态,维护日期,别名,数据来源
+node-example-seaport-a,示例海港A,pearl_river_delta,seaport,是,是,散粮；集装箱,*,散船；驳船；汽运,示例市,珠三角,confirmed,2026-07-24,示例港A；A港,demo_template
+node-example-pending-port,示例待确认港,,unknown,,,,,,,,manual_review,2026-07-24,示例港,demo_template

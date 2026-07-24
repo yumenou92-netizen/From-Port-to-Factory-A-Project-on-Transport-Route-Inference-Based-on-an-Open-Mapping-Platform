@@ -22,6 +22,7 @@ BULK_SHIPPING_TIME_RULE_VERSION = "1.0"
 
 PROJECT_DESTINATION_LABELS = {
     "马尾",
+    "秀屿",
     "揭阳",
     "漳州",
     "珠三角",
@@ -244,6 +245,7 @@ def classify_bulk_shipping_destination(port_name: str) -> tuple[str | None, str 
     name = str(port_name).strip()
     rules = (
         ("马尾", "马尾", "福建"),
+        ("秀屿", "秀屿", "福建"),
         ("漳州", "漳州", "福建"),
         ("揭阳", "揭阳", "珠三角"),
         ("茂名", "茂名/阳江", "粤西"),

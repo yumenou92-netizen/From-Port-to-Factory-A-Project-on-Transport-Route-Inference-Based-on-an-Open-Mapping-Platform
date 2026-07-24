@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from heapq import nsmallest
 from typing import Iterable, Literal
@@ -11,6 +12,8 @@ CustomerRouteStatus = Literal["resolved", "manual_review"]
 CustomerRouteBranch = Literal["private_terminal", "transfer_terminal"]
 CustomerCompatibilityStatus = Literal["eligible", "not_applicable", "manual_review"]
 TransferPortSelectionStatus = Literal["resolved", "not_applicable", "manual_review"]
+CustomerProfileConfirmationStatus = Literal["confirmed", "manual_review"]
+CustomerTerminalRelationType = Literal["owned_terminal"]
 
 
 class CustomerProfileError(ValueError):
@@ -29,6 +32,9 @@ class CustomerProfile:
     private_terminal_node_source: str | None = None
     allowed_package_types: tuple[str, ...] | None = None
     allowed_commodities: tuple[str, ...] | None = None
+    allowed_transport_modes: tuple[str, ...] | None = None
+    confirmation_status: CustomerProfileConfirmationStatus = "manual_review"
+    maintained_at: date | None = None
 
     def __post_init__(self) -> None:
         if self.has_private_terminal is not None and not isinstance(self.has_private_terminal, bool):
@@ -63,6 +69,48 @@ class CustomerProfile:
             "allowed_commodities",
             _normalize_optional_values(self.allowed_commodities, "允许品种"),
         )
+        object.__setattr__(
+            self,
+            "allowed_transport_modes",
+            _normalize_optional_values(self.allowed_transport_modes, "允许运输方式"),
+        )
+        if self.confirmation_status not in {"confirmed", "manual_review"}:
+            raise CustomerProfileError(f"不支持的客户画像确认状态：{self.confirmation_status}")
+        if self.maintained_at is not None and not isinstance(self.maintained_at, date):
+            raise CustomerProfileError("客户画像维护日期必须是 date 或 None。")
+
+
+@dataclass(frozen=True)
+class CustomerTerminalRelation:
+    """Source-backed relation between a customer and its private terminal node."""
+
+    customer_id: str
+    terminal_node_id: str
+    source: str
+    relation_type: CustomerTerminalRelationType = "owned_terminal"
+    confirmation_status: CustomerProfileConfirmationStatus = "manual_review"
+    maintained_at: date | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "customer_id", _required_text(self.customer_id, "客户 ID"))
+        object.__setattr__(
+            self,
+            "terminal_node_id",
+            _required_text(self.terminal_node_id, "客户自有码头节点 ID"),
+        )
+        object.__setattr__(self, "source", _required_text(self.source, "客户码头关系来源"))
+        if self.relation_type != "owned_terminal":
+            raise CustomerProfileError(f"不支持的客户码头关系类型：{self.relation_type}")
+        if self.confirmation_status not in {"confirmed", "manual_review"}:
+            raise CustomerProfileError(
+                f"不支持的客户码头关系确认状态：{self.confirmation_status}"
+            )
+        if self.maintained_at is not None and not isinstance(self.maintained_at, date):
+            raise CustomerProfileError("客户码头关系维护日期必须是 date 或 None。")
+
+    @property
+    def is_confirmed(self) -> bool:
+        return self.confirmation_status == "confirmed"
 
 
 @dataclass(frozen=True)
@@ -201,6 +249,8 @@ def resolve_customer_route(
     """Resolve the mutually exclusive second-stage route branch."""
     south_port = _required_text(south_port_node_id, "南港节点")
 
+    if profile.confirmation_status != "confirmed":
+        return _manual_route_review(profile, south_port, "客户画像尚未确认，不能生成可执行路线分支。")
     if profile.has_private_terminal is None:
         return _manual_route_review(profile, south_port, "客户是否有自有码头尚未确认，不能猜测路线分支。")
     if profile.private_terminal_flag_source is None:
@@ -254,6 +304,16 @@ def evaluate_customer_compatibility(
     """Evaluate explicit customer package and commodity restrictions."""
     normalized_package = _required_text(package_type, "包装方式")
     normalized_commodity = _required_text(commodity, "货物品种")
+    if profile.confirmation_status != "confirmed":
+        return CustomerCompatibilityResult(
+            status="manual_review",
+            customer_id=profile.customer_id,
+            package_type=normalized_package,
+            commodity=normalized_commodity,
+            source=profile.profile_source,
+            issues=("客户画像尚未确认。",),
+            message="客户画像尚未确认，不能据此判断包装方式或货物品种可行性。",
+        )
     issues: list[str] = []
     missing_rules = False
     unsupported = False

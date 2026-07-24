@@ -54,6 +54,8 @@ def make_profile(
         private_terminal_node_source=private_terminal_node_source,
         allowed_package_types=("散粮", "集装箱"),
         allowed_commodities=("玉米", "小麦"),
+        allowed_transport_modes=("散船", "驳船", "汽运"),
+        confirmation_status=("confirmed" if has_private_terminal is not None else "manual_review"),
     )
 
 

@@ -15,6 +15,7 @@ try:
         SearchObjective,
         calculate_graph_weight_signature,
     )
+    from .transport_contracts import CostComponent, CostComposition
 except ImportError:  # Support direct script-style imports used by demo scripts.
     from src.routing.route_search import (
         RouteSearchError,
@@ -23,6 +24,7 @@ except ImportError:  # Support direct script-style imports used by demo scripts.
         SearchObjective,
         calculate_graph_weight_signature,
     )
+    from src.routing.transport_contracts import CostComponent, CostComposition
 
 
 RouteResultStatus = Literal["resolved", "no_path", "manual_review"]
@@ -60,6 +62,7 @@ class RouteSegment:
     cost_rule_version: str
     calculation_detail: str
     data_source: str
+    cost_components: tuple[CostComponent, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.segment_no, bool) or not isinstance(self.segment_no, int) or self.segment_no <= 0:
@@ -88,6 +91,12 @@ class RouteSegment:
         distance_source = _optional_text(self.distance_source)
         object.__setattr__(self, "distance_km", distance)
         object.__setattr__(self, "distance_source", distance_source)
+        object.__setattr__(self, "cost_components", tuple(self.cost_components))
+        if self.cost_components:
+            try:
+                CostComposition(self.cost_components).validate_total(self.cost_yuan)
+            except ValueError as exc:
+                raise RouteResultError(str(exc)) from None
         if (distance is None) != (distance_source is None):
             raise RouteResultError("分段距离数值和来源必须同时存在或同时为空。")
         if self.maintained_at is not None and not isinstance(self.maintained_at, date):
@@ -398,6 +407,7 @@ def _build_segment(
         cost_rule_version=_required_attribute(attributes, "cost_rule_version", step.edge_key),
         calculation_detail=_required_attribute(attributes, "calculation_detail", step.edge_key),
         data_source=_required_attribute(attributes, "data_source", step.edge_key),
+        cost_components=tuple(attributes.get("cost_components") or ()),
     )
 
 

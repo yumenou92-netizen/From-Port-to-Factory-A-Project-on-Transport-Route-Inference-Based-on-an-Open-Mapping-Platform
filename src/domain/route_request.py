@@ -13,6 +13,9 @@ except ImportError:  # Support direct script-style imports used by demo scripts.
 RequestValidationStatus = Literal["valid", "manual_review"]
 FreightChargeStatus = Literal["valid", "not_applicable", "manual_review"]
 ShippingPriceMode = Literal["index", "manual"]
+TradeType = Literal["内贸", "外贸"]
+
+ALLOWED_TRADE_TYPES: Final[frozenset[str]] = frozenset({"内贸", "外贸"})
 
 PACKAGING_QUANTITY_UNITS: Final[dict[str, frozenset[str]]] = {
     "散粮": frozenset({"吨"}),
@@ -35,6 +38,7 @@ class RouteRequest:
     customer_id: str | None = None
     shipping_price_mode: ShippingPriceMode | None = None
     shipping_time_hours: Decimal | None = None
+    trade_type: TradeType | str = "内贸"
 
     def __post_init__(self) -> None:
         quantity = _positive_decimal(self.quantity, "订单数量")
@@ -45,6 +49,10 @@ class RouteRequest:
 
         package_type = _required_text(self.package_type, "包装方式")
         commodity = _required_text(self.commodity, "货物品种")
+        trade_type = _required_text(self.trade_type, "贸易类型")
+        if trade_type not in ALLOWED_TRADE_TYPES:
+            allowed = "、".join(sorted(ALLOWED_TRADE_TYPES))
+            raise RouteRequestError(f"不支持的贸易类型：{trade_type}；当前支持 {allowed}。")
         price_mode = _optional_text(self.shipping_price_mode)
         if price_mode is not None and price_mode not in {"index", "manual"}:
             raise RouteRequestError(f"不支持的散船计价模式：{self.shipping_price_mode}")
@@ -57,6 +65,7 @@ class RouteRequest:
         object.__setattr__(self, "quantity_unit", quantity_unit)
         object.__setattr__(self, "package_type", package_type)
         object.__setattr__(self, "commodity", commodity)
+        object.__setattr__(self, "trade_type", trade_type)
         object.__setattr__(self, "origin_port_id", _optional_text(self.origin_port_id))
         object.__setattr__(self, "south_port_id", _optional_text(self.south_port_id))
         object.__setattr__(self, "customer_id", _optional_text(self.customer_id))

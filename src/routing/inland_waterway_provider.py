@@ -35,18 +35,26 @@ class PortCapabilityRecord:
     node_id: str | None
     canonical_name: str
     region_code: str | None
-    can_handle_barge: bool
-    supported_package_types: tuple[str, ...]
-    supported_commodities: tuple[str, ...]
+    can_handle_barge: bool | None
+    supported_package_types: tuple[str, ...] | None
+    supported_commodities: tuple[str, ...] | None
     source: str
     aliases: tuple[str, ...] = ()
     infrastructure_type: str = "unknown"
-    can_receive_bulk_shipping: bool = False
+    can_receive_bulk_shipping: bool | None = None
+    supported_transport_modes: tuple[str, ...] | None = None
+    city: str | None = None
+    shipping_time_region: str | None = None
+    confirmation_status: Literal["confirmed", "manual_review"] = "manual_review"
+    maintained_at: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "node_id", _optional_text(self.node_id))
         object.__setattr__(self, "canonical_name", _required_text(self.canonical_name, "港口能力名称"))
         object.__setattr__(self, "region_code", _optional_text(self.region_code))
+        object.__setattr__(self, "city", _optional_text(self.city))
+        object.__setattr__(self, "shipping_time_region", _optional_text(self.shipping_time_region))
+        object.__setattr__(self, "maintained_at", _optional_text(self.maintained_at))
         object.__setattr__(self, "source", _required_text(self.source, "港口能力来源"))
         object.__setattr__(
             self,
@@ -56,22 +64,34 @@ class PortCapabilityRecord:
         object.__setattr__(
             self,
             "supported_package_types",
-            _normalized_text_tuple(self.supported_package_types, "港口支持包装方式"),
+            _normalized_optional_text_tuple(self.supported_package_types, "港口支持包装方式"),
         )
         object.__setattr__(
             self,
             "supported_commodities",
-            _normalized_text_tuple(self.supported_commodities, "港口支持货物品种"),
+            _normalized_optional_text_tuple(self.supported_commodities, "港口支持货物品种"),
+        )
+        object.__setattr__(
+            self,
+            "supported_transport_modes",
+            _normalized_optional_text_tuple(self.supported_transport_modes, "港口支持运输方式"),
         )
         object.__setattr__(
             self,
             "aliases",
             _normalized_text_tuple(self.aliases, "港口能力别名", allow_empty=True),
         )
-        if not isinstance(self.can_handle_barge, bool):
-            raise InlandWaterwayProviderError("can_handle_barge 必须是布尔值。")
-        if not isinstance(self.can_receive_bulk_shipping, bool):
-            raise InlandWaterwayProviderError("can_receive_bulk_shipping 必须是布尔值。")
+        if self.can_handle_barge is not None and not isinstance(self.can_handle_barge, bool):
+            raise InlandWaterwayProviderError("can_handle_barge 必须是布尔值或 None。")
+        if self.can_receive_bulk_shipping is not None and not isinstance(
+            self.can_receive_bulk_shipping,
+            bool,
+        ):
+            raise InlandWaterwayProviderError("can_receive_bulk_shipping 必须是布尔值或 None。")
+        if self.confirmation_status not in {"confirmed", "manual_review"}:
+            raise InlandWaterwayProviderError(
+                f"不支持的港口能力确认状态：{self.confirmation_status}"
+            )
 
     def matches(self, *, node_id: str | None, name: str) -> bool:
         normalized_id = _optional_text(node_id)
@@ -83,12 +103,25 @@ class PortCapabilityRecord:
 
     def supports_order(self, request: RouteRequest) -> bool:
         return (
-            self.can_handle_barge
+            self.can_handle_barge is True
+            and self.supported_package_types is not None
+            and self.supported_commodities is not None
             and request.package_type in self.supported_package_types
             and (
                 request.commodity in self.supported_commodities
                 or "*" in self.supported_commodities
             )
+        )
+
+    @property
+    def capability_data_confirmed(self) -> bool:
+        return (
+            self.confirmation_status == "confirmed"
+            and self.can_handle_barge is not None
+            and self.can_receive_bulk_shipping is not None
+            and self.supported_package_types is not None
+            and self.supported_commodities is not None
+            and self.supported_transport_modes is not None
         )
 
 
@@ -418,6 +451,15 @@ def _normalized_text_tuple(
     if not normalized and not allow_empty:
         raise InlandWaterwayProviderError(f"{field_name}不能为空。")
     return tuple(dict.fromkeys(normalized))
+
+
+def _normalized_optional_text_tuple(
+    values: Sequence[object] | None,
+    field_name: str,
+) -> tuple[str, ...] | None:
+    if values is None:
+        return None
+    return _normalized_text_tuple(values, field_name, allow_empty=True)
 
 
 def _positive_decimal(value: object, field_name: str) -> Decimal:

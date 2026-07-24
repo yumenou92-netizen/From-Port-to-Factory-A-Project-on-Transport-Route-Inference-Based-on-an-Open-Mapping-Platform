@@ -12,7 +12,12 @@ TransportStage = Literal[
     "rail_trunk",
 ]
 TimeScope = Literal["pure_sailing", "complete_segment", "road_driving"]
-CostSourceType = Literal["real_data", "confirmed_rule", "demo_placeholder"]
+CostSourceType = Literal[
+    "real_data",
+    "confirmed_rule",
+    "regional_proxy",
+    "demo_placeholder",
+]
 
 ALLOWED_TRANSPORT_STAGES = {
     "bulk_shipping_trunk",
@@ -70,7 +75,12 @@ class CostComponent:
             "calculation_detail",
             _required_text(self.calculation_detail, "费用计算说明"),
         )
-        if self.source_type not in {"real_data", "confirmed_rule", "demo_placeholder"}:
+        if self.source_type not in {
+            "real_data",
+            "confirmed_rule",
+            "regional_proxy",
+            "demo_placeholder",
+        }:
             raise TransportContractError(f"不支持的费用来源类型：{self.source_type}")
         object.__setattr__(self, "amount_yuan", _positive_decimal(self.amount_yuan, "费用组成金额"))
 

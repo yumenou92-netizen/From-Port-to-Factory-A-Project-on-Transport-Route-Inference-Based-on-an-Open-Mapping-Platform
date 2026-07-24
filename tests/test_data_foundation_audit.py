@@ -33,7 +33,7 @@ def test_data_foundation_audit_counts_all_freight_locations_and_request_profiles
     assert [column.scope for column in audit.bulk_columns] == [
         "project_scope_confirmed",
         "project_scope_confirmed",
-        "project_scope_needs_confirmation",
+        "project_scope_confirmed",
         "out_of_scope",
         "out_of_scope",
     ]
@@ -55,6 +55,60 @@ def test_write_audit_outputs_creates_markdown_json_and_csv(tmp_path):
     assert "数据夯实审计" in markdown_path.read_text(encoding="utf-8")
     assert (tmp_path / "output" / "data_foundation_request_profiles.csv").exists()
     assert (tmp_path / "output" / "data_foundation_bulk_workbook_columns.csv").exists()
+    assert (tmp_path / "output" / "data_foundation_port_capabilities.csv").exists()
+    assert (tmp_path / "output" / "data_foundation_region_mappings.csv").exists()
+    assert (
+        tmp_path / "output" / "data_foundation_operation_fee_region_assignments.csv"
+    ).exists()
+    assert (tmp_path / "output" / "data_foundation_port_operation_fees.csv").exists()
+
+
+def test_data_foundation_audit_reports_w3_w5_reference_tables(tmp_path):
+    data_dir = write_real_data_fixture(tmp_path / "data")
+    write_csv(
+        data_dir / "港口能力表.csv",
+        [
+            "canonical_name",
+            "region_code",
+            "infrastructure_type",
+            "can_receive_bulk_shipping",
+            "can_handle_barge",
+            "supported_package_types",
+            "supported_commodities",
+            "source",
+        ],
+        [["南港A", "pearl_river_delta", "seaport", "是", "是", "散粮", "*", "test"]],
+    )
+    write_csv(
+        data_dir / "区域映射表.csv",
+        [
+            "region_code",
+            "region_name",
+            "city_keywords",
+            "port_keywords",
+            "bulk_rate_destination_group",
+            "bulk_time_region",
+            "source",
+        ],
+        [["pearl_river_delta", "珠三角", "广州", "南港A", "珠三角", "珠三角", "test"]],
+    )
+    write_csv(
+        data_dir / "南港码头作业费.csv",
+        ["港口名称", "包装方式", "费用类型", "单价", "费用单位", "数据来源"],
+        [["南港A", "散粮", "码头作业费", "8", "元/吨", "test"]],
+    )
+
+    audit = build_data_foundation_audit(
+        load_real_data_bundle(data_dir),
+        request_profiles=(RouteRequest(500, "吨", "散粮", "玉米"),),
+    )
+
+    assert audit.port_capability_count == 1
+    assert audit.region_mapping_count == 1
+    assert audit.port_operation_fee_rate_count == 1
+    assert audit.unresolved_port_capability_node_count == 0
+    assert audit.unresolved_port_operation_fee_node_count == 0
+    assert audit.reference_warnings == []
 
 
 def test_inspect_bulk_workbook_reads_merged_like_headers_from_previous_destination(tmp_path):
@@ -131,6 +185,15 @@ def write_json_lines(path, rows):
     path.write_text(
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
         encoding="utf-8",
+    )
+
+
+def write_csv(path, headers, rows):
+    path.write_text(
+        ",".join(headers)
+        + "\n"
+        + "\n".join(",".join(str(value) for value in row) for row in rows),
+        encoding="utf-8-sig",
     )
 
 

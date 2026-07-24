@@ -2,6 +2,42 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-07-24
+
+### Changed
+
+- Confirmed `秀屿` as an in-scope Fujian bulk-shipping destination label and mapped `秀屿港` to the `福建` pure-sailing time region for bulk-shipping classification.
+- Added W3 CSV loaders for `港口能力表.csv` and `区域映射表.csv`; missing tables are audited as missing interfaces rather than guessed defaults.
+- Extended the data-foundation audit to report W3/W5 table paths, record counts, node-binding gaps, warnings, and row-level CSV outputs for port capabilities, region mappings, and south-port operation fees.
+- Added a W5 south-port operation-fee Provider contract for one aggregate `码头作业费` component in `元/吨`.
+- Added a CSV-backed operation-fee Provider and an explicit `demo_placeholder` operation-fee Provider; missing or unmatched operation-fee data returns `manual_review` without a usable amount and is not interpreted as zero.
+- Extended `RouteRequest` and the W5 operation-fee Provider with `trade_type`: current demo defaults to `内贸`, while `外贸` is preserved as an explicit future matching dimension.
+- Extended W5 operation-fee matching to require exact package, commodity scope, trade type, and fee unit alignment; `散粮` uses `元/吨`, containerized orders may use `元/箱`, and `吨/箱/柜` are still never converted automatically.
+- Added a read-only `部分码头标签.json` audit converter: `serviceFees.入库` is treated as a candidate `码头作业费` unit rate for `散粮`, retaining `tradeType` and commodity scope while leaving unmatched aliases or invalid fee rows for manual review.
+- Added dictionary-first label resolution to the port-label audit: only unique exact matches after conservative port-suffix normalization may bind an audit candidate, without registering aliases or writing formal data; unresolved names are deduplicated into a Tencent-pending JSONL, while API results are written to a separate review file only when explicitly requested.
+- Added tested W3/W5 data templates under `docs/data_templates/` so business-maintained CSV files can be created without guessing headers.
+- Connected the W5 operation-fee Provider to `leader_full_flow` as an optional formal input: when a fee table is present, resolved fees are included as trunk-edge cost components, while candidates with missing or unsafe operation-fee data are excluded with a warning instead of participating as implicit zero-cost fees.
+- Extended `RouteSegment` to preserve and validate `CostComponent` entries, allowing leader output to show sub-costs such as bulk-shipping freight and south-port operation fees.
+- Applied the first human-reviewed port-label identity batch and the already-unambiguous candidate write-back to local real-data masters: ten new coordinate nodes and fourteen explicit alias relationships now bind the reviewed raw labels to standard nodes; `肇庆福加德码头` is bound to the customer company node and classified as customer-owned, while `汇东`, `百达`, and `红东` remain explicit ignores rather than aliases.
+- Kept the partial operation-fee source out of the active formal filename because strict W5 loading would exclude every uncovered south-port candidate; W3 capability booleans also remain unfilled until business confirmation rather than being inferred from identity.
+- Added the confirmed W5 operation-fee priority `exact node rate -> confirmed operation_fee_region_code proxy -> manual_review`; region assignments use explicit standard node IDs and never city/name/coordinate inference.
+- Added `regional_proxy` as a formal traceable cost source. Proxy components retain the reference port, mapping basis, rule ID/version, and an explicit statement that the value is not the target port's exact real rate.
+- Extended W3/W5 templates and the data-foundation audit with operation-fee region assignments and reference-port fields; unconfirmed or duplicate mappings and reference rates remain manual-review evidence.
+- Extended route-relevant node and customer contracts with supported transport modes, confirmation status, maintenance fields, and a stable customer-owned-terminal relation; unknown port capabilities are preserved as blank/`None` instead of false, and capability filtering remains disabled.
+
+### Verification
+
+- W3/W5 and affected bulk/audit tests passed: `19 passed in 0.25s`.
+- Affected inland-waterway/full-flow/cost-component regression tests passed: `20 passed in 0.59s`.
+- W3/W5 templates, full-flow operation-fee integration, route-result cost components, Provider, and audit tests passed: `32 passed in 0.54s`.
+- Trade-type, W5 exact-unit matching, tag-JSON conversion, full-flow, and data-foundation affected tests passed: `44 passed in 0.43s`.
+- Read-only data-foundation audit completed without Tencent calls or real-data write-back; current real data shows 0 unresolved freight locations, 2 unresolved AdditionalFee station nodes, 18 bulk-workbook columns, and 0 currently loaded W3/W5 records.
+- Read-only `部分码头标签.json` audit completed without Tencent calls or real-data write-back: 76 expanded candidate fee records, 2 manual-review rows, 13 direct node matches, and 65 unmatched rule rows covering 27 deduplicated names requiring alias/Tencent/manual confirmation before formal table use.
+- Dictionary-first and Tencent-review workflow tests passed: `13 passed in 0.48s`; the refreshed read-only audit found 13 direct matches, 9 dictionary-assisted rule-row matches covering 4 names, and 56 still-unmatched rows covering 23 deduplicated Tencent-review names.
+- After the human-confirmed and unambiguous alias/coordinate write-back, all 24 checked lookup names resolve to the intended standard nodes. The refreshed no-Tencent audit found 60 direct matches, 9 dictionary-assisted rule-row matches, and 9 still-unmatched rows covering 7 deduplicated names.
+- Final alias, node-registry, and port-label audit tests passed: `16 passed in 0.45s`; the real-data registry loads 303 standard nodes with zero coordinate conflicts, and its two remaining alias-review groups are pre-existing railway-name groups.
+- W5 regional proxy, route-label contracts, customer-owned-terminal relation, cost-component, formal-graph/search, full-flow, template, and audit tests passed: `123 passed in 0.75s`. Full pytest, Tencent calls, and the real-data smoke were intentionally not repeated because the user requested affected-scope verification only.
+
 ## 2026-07-23
 
 ### Changed
@@ -24,6 +60,9 @@ This changelog records actual engineering changes. It is not a leader-facing dai
 - Real-data smoke was intentionally skipped for this increment; a no-network read-only probe confirmed the real workbook loads and distinguishes confirmed sea-shipping destinations from unmatched inland candidates.
 - Focused full-flow warning regression passed after the vessel-time boundary update.
 - Focused inland-waterway Provider tests passed: `6 passed in 0.07s`.
+- Pre-commit affected-suite tests passed: `47 passed in 0.65s`.
+- End-of-day full pytest passed: `300 passed in 1.78s`.
+- End-of-day read-only data-foundation audit completed without Tencent calls or real-data write-back; current audit shows 0 unresolved freight-rate locations, 2 unresolved AdditionalFee station nodes, and 18 bulk-workbook columns.
 
 ## 2026-07-22
 

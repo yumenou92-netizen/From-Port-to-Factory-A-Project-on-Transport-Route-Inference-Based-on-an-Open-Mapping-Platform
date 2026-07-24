@@ -1,6 +1,6 @@
 # ARCHITECTURE.md
 
-Updated: 2026-07-21
+Updated: 2026-07-24
 
 This document describes the current architecture and the next real-data integration boundary of the route inference prototype.
 
@@ -99,6 +99,9 @@ Files:
 
 - `src/data/audit.py`
 - `src/data/loaders.py`
+- `src/data/data_foundation_audit.py`
+- `src/data/port_reference.py`
+- `src/data/port_label_rules.py`
 
 Responsibilities:
 
@@ -106,12 +109,19 @@ Responsibilities:
 - validate required fields;
 - produce sanitized reports;
 - preserve source file and source row where available;
-- keep full audit separate from route-candidate filtering.
+- keep full audit separate from route-candidate filtering;
+- load optional W3 `港口能力表.csv` and `区域映射表.csv` as explicit source interfaces;
+- load W5 operation-fee region assignments only from explicit standard-node IDs in `区域映射表.csv`; keyword and coordinate matching do not create fee assignments;
+- convert leader-provided `部分码头标签.json` into read-only candidate W5 audit rows without writing formal data;
+- audit missing W3/W5 interface files and unresolved node bindings without guessing defaults.
 
 Rules:
 
 - data audit reads all records;
 - route construction may later filter to latest effective rates;
+- missing port capability or regional mapping records do not imply a negative or positive capability; they remain audit gaps;
+- port capability booleans are tri-state: blank is unknown, while false means confirmed non-support; the formal capability table is not an active full-flow filter yet;
+- `部分码头标签.json` is a candidate source only: aliases are resolved through name dictionary, Tencent candidate lookup, and manual confirmation before formal CSV maintenance;
 - raw business data stays local.
 
 ### Node Layer
@@ -162,6 +172,8 @@ Files:
 - `src/domain/freight_rate.py`
 - `src/domain/latest_rate_selector.py`
 - `src/domain/cost_rules.py`
+- `src/routing/bulk_shipping_provider.py`
+- `src/routing/port_operation_fee_provider.py`
 
 Responsibilities:
 
@@ -172,7 +184,9 @@ Responsibilities:
 - expose whether the effective maintenance date was defaulted for downstream explanation;
 - preserve same-effective-date conflict records as manual-review evidence;
 - calculate traceable cost results;
-- return `valid`, `not_applicable`, or `manual_review`.
+- return `valid`, `not_applicable`, or `manual_review`;
+- calculate north-port to south-port bulk-shipping trunk freight from the real workbook latest row;
+- model south-port `码头作业费` as a separate future cost component through an explicit Provider.
 
 Current enabled rule groups:
 
@@ -184,6 +198,9 @@ Current enabled rule groups:
 - known truck maintained-rate calculation;
 - unknown bulk truck distance-tier calculation when `distance_km` and `distance_source` are supplied;
 - unknown container truck yuan-per-box calculation when `distance_km` and `distance_source` are supplied.
+- real bulk-shipping workbook rate calculation for in-scope south-port destination labels;
+- W5 south-port operation-fee Provider contract for one aggregate `码头作业费` component, matched by south port, package type, trade type, commodity scope, and exact fee unit (`元/吨` for bulk-grain ton orders; `元/箱` reserved for containerized orders).
+- W5 operation-fee priority is exact standard-node rate, then one confirmed `operation_fee_region_code` reference rate, then manual review. Regional results use `regional_proxy` and preserve reference-port and mapping-rule trace.
 
 Current disabled rule groups:
 
@@ -214,9 +231,13 @@ Current state:
 - truck-route adapter exists as an optional future enhancement, not the current dependency;
 - unknown bulk and container truck costs consume confirmed road distance from the geo layer, and currently accept Tencent normal driving distance as the prototype distance source;
 - `build_transport_edge()` combines resolved shipping time with freight-rate and cost results;
-- the real-data `EdgeCandidate` bridge accepts explicit manual time for integration validation; a formal business shipping-time source is still missing;
+- the real-data `EdgeCandidate` bridge accepts explicit manual time for legacy integration validation; the current `leader_full_flow` bulk-shipping trunk uses real workbook rates and confirmed pure-sailing regional time;
 - Tencent Maps must not be called directly from cost rules.
 - `routing/inland_waterway_provider.py` defines the next data interfaces for port capabilities, regional mappings, and inland-waterway barge fee/time records; its first Provider is demo-only and generates explicit `demo_placeholder` barge edges only for same-region Fujian/Minjiang or Pearl Delta bulk-grain scenarios.
+- `data/port_reference.py` is the CSV-backed W3 loader for port capabilities and regional mappings and the W5 loader for explicit node-to-operation-fee-region assignments; missing or unconfirmed inputs are audited rather than inferred.
+- `routing/port_operation_fee_provider.py` is the W5 cost interface for south-port operation fees. It uses exact rate -> confirmed region proxy -> manual review, and missing, duplicated, trade-type-mismatched, commodity-mismatched, unit-mismatched, or order-mismatched records are not interpreted as zero.
+- `data/port_label_rules.py` reads `部分码头标签.json` as a candidate rule source: `serviceFees.入库` may become a candidate operation-fee rate, but only formal CSV records can enter normal route costing.
+- `leader_full_flow.py` may optionally load the W5 operation-fee Provider; if the fee table is absent, the demo explicitly reports that operation fees are not counted, and if the table is present, candidates with missing or unsafe operation-fee data are excluded instead of being treated as zero-cost.
 - Inland-waterway barge Provider output uses `transport_stage=barge_last_mile` and `time_scope=pure_sailing`; formal barge data must replace the demo records before these edges are treated as real business data.
 
 ### Customer Rule Layer
@@ -227,7 +248,8 @@ File:
 
 Responsibilities:
 
-- preserve customer ID, factory node, private-terminal flag/node, allowed packaging/commodities, and their sources;
+- preserve customer ID, factory node, private-terminal flag/node, allowed packaging/commodities/transport modes, confirmation status, maintenance date, and their sources;
+- represent the customer-to-private-terminal relation with stable IDs and its own confirmation/source trace;
 - resolve private-terminal and transfer-terminal branches as mutually exclusive;
 - return manual review for unknown, missing-source, or contradictory profile data;
 - pre-filter confirmed transfer-port candidates by distance while requiring later cost/time comparison.

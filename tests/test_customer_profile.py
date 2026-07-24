@@ -6,6 +6,7 @@ from src.routing.customer_profile import (
     CustomerProfile,
     CustomerProfileError,
     CustomerRouteDecision,
+    CustomerTerminalRelation,
     TransferPortCandidate,
     evaluate_customer_compatibility,
     prefilter_transfer_ports,
@@ -23,6 +24,8 @@ def make_profile(**overrides) -> CustomerProfile:
         "private_terminal_flag_source": "人工确认表",
         "allowed_package_types": ("散粮", "集装箱"),
         "allowed_commodities": ("玉米", "小麦"),
+        "allowed_transport_modes": ("散船", "驳船", "汽运"),
+        "confirmation_status": "confirmed",
     }
     values.update(overrides)
     return CustomerProfile(**values)
@@ -89,6 +92,42 @@ def test_unknown_or_inconsistent_private_terminal_data_requires_review(overrides
     assert result.branch is None
     assert result.requires_manual_review
     assert message_fragment in result.message
+
+
+def test_unconfirmed_customer_profile_requires_review_even_when_terminal_flag_is_present():
+    profile = make_profile(confirmation_status="manual_review")
+
+    result = resolve_customer_route(profile, south_port_node_id="node-south-port-demo")
+
+    assert result.status == "manual_review"
+    assert "客户画像尚未确认" in result.message
+
+    compatibility = evaluate_customer_compatibility(
+        profile,
+        package_type="散粮",
+        commodity="玉米",
+    )
+    assert compatibility.status == "manual_review"
+    assert "客户画像尚未确认" in compatibility.message
+
+
+def test_customer_terminal_relation_requires_stable_ids_source_and_confirmation():
+    relation = CustomerTerminalRelation(
+        customer_id="customer-demo-001",
+        terminal_node_id="node-private-terminal-demo",
+        source="manual_confirmed:2026-07-24",
+        confirmation_status="confirmed",
+    )
+
+    assert relation.is_confirmed
+    assert relation.relation_type == "owned_terminal"
+
+    with pytest.raises(CustomerProfileError, match="码头节点 ID"):
+        CustomerTerminalRelation(
+            customer_id="customer-demo-001",
+            terminal_node_id="",
+            source="manual_confirmed:2026-07-24",
+        )
 
 
 def test_customer_compatibility_accepts_explicitly_supported_package_and_commodity():

@@ -79,6 +79,27 @@ def test_demo_placeholder_is_explicit_source_type():
     assert component.is_demo_placeholder
 
 
+def test_regional_proxy_is_a_traceable_non_placeholder_source_type():
+    component = CostComponent(
+        component_type="south_port_operation_fee",
+        amount_yuan="4000",
+        source_type="regional_proxy",
+        source=(
+            "regional_proxy:reference_port_node_id=node-xiuyu;"
+            "region_code=fujian_zhangzhou"
+        ),
+        rule_id="south_port_operation_fee_region_proxy",
+        rule_version="1.0",
+        calculation_detail=(
+            "按已维护作业费区域映射引用参考码头费率；"
+            "该金额不是目标码头精确真实费率。"
+        ),
+    )
+
+    assert component.source_type == "regional_proxy"
+    assert not component.is_demo_placeholder
+
+
 def test_manual_review_outcome_requires_stable_trace_fields():
     outcome = ManualReviewOutcome(
         status="manual_review",

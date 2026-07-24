@@ -26,6 +26,8 @@ def test_formal_customer_to_route_result_pipeline_preserves_traceable_branch():
         private_terminal_flag_source="人工确认表",
         allowed_package_types=("散粮",),
         allowed_commodities=("玉米",),
+        allowed_transport_modes=("散船", "汽运"),
+        confirmation_status="confirmed",
     )
     decision = resolve_customer_route(profile, south_port_node_id="node-south")
     selection = prefilter_transfer_ports(

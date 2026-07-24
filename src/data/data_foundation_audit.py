@@ -13,12 +13,18 @@ from typing import Any, Iterable, Sequence
 from xml.etree import ElementTree
 
 from src.data.loaders import RealDataBundle, data_dir_from_env, load_real_data_bundle
+from src.data.port_reference import load_port_reference_tables
 from src.domain.route_request import RouteRequest
+from src.routing.port_operation_fee_provider import (
+    find_optional_port_operation_fee_file,
+    load_port_operation_fee_rates,
+)
 
 
 BULK_RATE_FILE_NAME = "散船运价表.xlsx"
 TARGET_DESTINATION_LABELS = {
     "马尾",
+    "秀屿",
     "揭阳",
     "漳州",
     "珠三角",
@@ -29,7 +35,7 @@ TARGET_DESTINATION_LABELS = {
     "防城港",
     "马村/海口",
 }
-TARGET_BUT_UNCONFIRMED_LABELS = {"秀屿"}
+TARGET_BUT_UNCONFIRMED_LABELS: set[str] = set()
 OUT_OF_SCOPE_DESTINATION_LABELS = {"日照", "潍坊", "长三角", "重庆驳船"}
 DEFAULT_OUTPUT_DIR = Path("output")
 
@@ -74,8 +80,25 @@ class FoundationAudit:
     bulk_workbook_path: str | None
     bulk_latest_date_label: str | None
     bulk_columns: list[BulkWorkbookColumn]
+    port_capability_file: str | None
+    region_mapping_file: str | None
+    port_operation_fee_file: str | None
+    port_capability_count: int
+    region_mapping_count: int
+    operation_fee_region_assignment_count: int
+    confirmed_operation_fee_region_assignment_count: int
+    port_operation_fee_rate_count: int
+    unresolved_port_capability_node_count: int
+    unresolved_port_operation_fee_node_count: int
+    port_capability_rows: list[dict[str, Any]]
+    region_mapping_rows: list[dict[str, Any]]
+    operation_fee_region_assignment_rows: list[dict[str, Any]]
+    port_operation_fee_rows: list[dict[str, Any]]
+    reference_warnings: list[str]
     unresolved_freight_locations: list[str]
     unresolved_additional_fee_nodes: list[str]
+    unresolved_port_capability_nodes: list[str]
+    unresolved_port_operation_fee_nodes: list[str]
 
 
 def build_data_foundation_audit(
@@ -115,6 +138,33 @@ def build_data_foundation_audit(
     if bulk_workbook_path is not None:
         bulk_columns, latest_date_label = inspect_bulk_workbook(bulk_workbook_path)
 
+    port_reference = load_port_reference_tables(bundle.data_dir, registry=registry)
+    operation_fee_file = find_optional_port_operation_fee_file(bundle.data_dir)
+    operation_fee_rates = (
+        load_port_operation_fee_rates(operation_fee_file, registry=registry)
+        if operation_fee_file is not None
+        else []
+    )
+    reference_warnings = list(port_reference.warnings)
+    if operation_fee_file is None:
+        reference_warnings.append("南港码头作业费.csv 未接入；缺失作业费不计入，也不解释为 0。")
+    pending_operation_fee_assignments = [
+        item
+        for item in port_reference.operation_fee_region_assignments
+        if not item.is_confirmed
+    ]
+    if pending_operation_fee_assignments:
+        reference_warnings.append(
+            f"作业费区域映射中有 {len(pending_operation_fee_assignments)} 条尚未确认；"
+            "这些映射不参与地域代理。"
+        )
+    unresolved_port_capability_nodes = sorted(
+        record.canonical_name for record in port_reference.port_capabilities if record.node_id is None
+    )
+    unresolved_port_operation_fee_nodes = sorted(
+        rate.port_name for rate in operation_fee_rates if rate.node_id is None
+    )
+
     return FoundationAudit(
         data_dir=str(bundle.data_dir),
         freight_rate_count=len(bundle.freight_rates),
@@ -130,8 +180,47 @@ def build_data_foundation_audit(
         bulk_workbook_path=str(bulk_workbook_path) if bulk_workbook_path else None,
         bulk_latest_date_label=latest_date_label,
         bulk_columns=bulk_columns,
+        port_capability_file=(
+            str(port_reference.port_capability_file)
+            if port_reference.port_capability_file is not None
+            else None
+        ),
+        region_mapping_file=(
+            str(port_reference.region_mapping_file)
+            if port_reference.region_mapping_file is not None
+            else None
+        ),
+        port_operation_fee_file=str(operation_fee_file) if operation_fee_file is not None else None,
+        port_capability_count=len(port_reference.port_capabilities),
+        region_mapping_count=len(port_reference.region_mappings),
+        operation_fee_region_assignment_count=len(
+            port_reference.operation_fee_region_assignments
+        ),
+        confirmed_operation_fee_region_assignment_count=sum(
+            item.is_confirmed
+            for item in port_reference.operation_fee_region_assignments
+        ),
+        port_operation_fee_rate_count=len(operation_fee_rates),
+        unresolved_port_capability_node_count=len(unresolved_port_capability_nodes),
+        unresolved_port_operation_fee_node_count=len(unresolved_port_operation_fee_nodes),
+        port_capability_rows=[
+            port_capability_to_row(record) for record in port_reference.port_capabilities
+        ],
+        region_mapping_rows=[
+            region_mapping_to_row(record) for record in port_reference.region_mappings
+        ],
+        operation_fee_region_assignment_rows=[
+            operation_fee_region_assignment_to_row(record)
+            for record in port_reference.operation_fee_region_assignments
+        ],
+        port_operation_fee_rows=[
+            port_operation_fee_to_row(record) for record in operation_fee_rates
+        ],
+        reference_warnings=reference_warnings,
         unresolved_freight_locations=unresolved_freight_locations,
         unresolved_additional_fee_nodes=unresolved_additional_fee_nodes,
+        unresolved_port_capability_nodes=unresolved_port_capability_nodes,
+        unresolved_port_operation_fee_nodes=unresolved_port_operation_fee_nodes,
     )
 
 
@@ -239,6 +328,77 @@ def classify_bulk_destination(destination: str) -> tuple[str, str]:
     if destination in OUT_OF_SCOPE_DESTINATION_LABELS:
         return "out_of_scope", "非本阶段广东/广西/福建/海南目标范围或非散船干线"
     return "needs_review", "未识别目的地标签，需要人工判断是否属于项目范围"
+
+
+def port_capability_to_row(record: Any) -> dict[str, Any]:
+    return {
+        "node_id": record.node_id or "",
+        "canonical_name": record.canonical_name,
+        "region_code": record.region_code or "",
+        "infrastructure_type": record.infrastructure_type,
+        "can_receive_bulk_shipping": (
+            "" if record.can_receive_bulk_shipping is None else record.can_receive_bulk_shipping
+        ),
+        "can_handle_barge": "" if record.can_handle_barge is None else record.can_handle_barge,
+        "supported_package_types": "；".join(record.supported_package_types or ()),
+        "supported_commodities": "；".join(record.supported_commodities or ()),
+        "supported_transport_modes": "；".join(record.supported_transport_modes or ()),
+        "city": record.city or "",
+        "shipping_time_region": record.shipping_time_region or "",
+        "confirmation_status": record.confirmation_status,
+        "aliases": "；".join(record.aliases),
+        "source": record.source,
+        "maintained_at": record.maintained_at or "",
+    }
+
+
+def region_mapping_to_row(record: Any) -> dict[str, Any]:
+    return {
+        "region_code": record.region_code,
+        "region_name": record.region_name,
+        "city_keywords": "；".join(record.city_keywords),
+        "port_keywords": "；".join(record.port_keywords),
+        "bulk_rate_destination_group": record.bulk_rate_destination_group or "",
+        "bulk_time_region": record.bulk_time_region or "",
+        "source": record.source,
+    }
+
+
+def operation_fee_region_assignment_to_row(record: Any) -> dict[str, Any]:
+    return {
+        "port_node_id": record.port_node_id,
+        "operation_fee_region_code": record.operation_fee_region_code,
+        "mapping_basis": record.mapping_basis,
+        "mapping_rule_id": record.mapping_rule_id,
+        "mapping_rule_version": record.mapping_rule_version,
+        "confirmation_status": record.confirmation_status,
+        "source": record.source,
+        "maintained_at": record.maintained_at or "",
+    }
+
+
+def port_operation_fee_to_row(record: Any) -> dict[str, Any]:
+    return {
+        "node_id": record.node_id or "",
+        "port_name": record.port_name,
+        "package_type": record.package_type,
+        "trade_type": record.trade_type,
+        "fee_type": record.fee_type,
+        "unit_price_yuan_per_ton": str(record.unit_price_yuan_per_ton),
+        "fee_unit": record.fee_unit,
+        "source_type": record.source_type,
+        "source": record.source,
+        "commodity_scope": "；".join(record.commodity_scope),
+        "aliases": "；".join(record.aliases),
+        "maintained_at": record.maintained_at or "",
+        "operation_fee_region_code": record.operation_fee_region_code or "",
+        "is_region_reference": record.is_region_reference,
+        "reference_port_node_id": record.reference_port_node_id or "",
+        "mapping_source": record.mapping_source or "",
+        "mapping_basis": record.mapping_basis or "",
+        "mapping_rule_id": record.mapping_rule_id or "",
+        "mapping_rule_version": record.mapping_rule_version or "",
+    }
 
 
 def read_xlsx_first_sheet(path: Path) -> list[list[str]]:
@@ -353,10 +513,22 @@ def write_audit_outputs(audit: FoundationAudit, output_dir: Path) -> tuple[Path,
         output_dir / "data_foundation_bulk_workbook_columns.csv",
         [asdict(column) for column in audit.bulk_columns],
     )
+    write_csv(output_dir / "data_foundation_port_capabilities.csv", audit.port_capability_rows)
+    write_csv(output_dir / "data_foundation_region_mappings.csv", audit.region_mapping_rows)
+    write_csv(
+        output_dir / "data_foundation_operation_fee_region_assignments.csv",
+        audit.operation_fee_region_assignment_rows,
+    )
+    write_csv(output_dir / "data_foundation_port_operation_fees.csv", audit.port_operation_fee_rows)
     write_csv(
         output_dir / "data_foundation_unresolved_locations.csv",
         [{"name": name, "scope": "freight_rate"} for name in audit.unresolved_freight_locations]
-        + [{"name": name, "scope": "additional_fee"} for name in audit.unresolved_additional_fee_nodes],
+        + [{"name": name, "scope": "additional_fee"} for name in audit.unresolved_additional_fee_nodes]
+        + [{"name": name, "scope": "port_capability"} for name in audit.unresolved_port_capability_nodes]
+        + [
+            {"name": name, "scope": "port_operation_fee"}
+            for name in audit.unresolved_port_operation_fee_nodes
+        ],
     )
     return json_path, markdown_path
 
@@ -367,6 +539,8 @@ def to_jsonable(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: to_jsonable(item) for key, item in value.items()}
     if isinstance(value, list):
+        return [to_jsonable(item) for item in value]
+    if isinstance(value, tuple):
         return [to_jsonable(item) for item in value]
     return value
 
@@ -396,6 +570,14 @@ def render_markdown(audit: FoundationAudit) -> str:
         f"- 运价表不同地点名称：{audit.unique_freight_location_count}",
         f"- 运价地点未注册数量：{audit.unresolved_freight_location_count}",
         f"- AdditionalFee 节点未注册数量：{audit.unresolved_additional_fee_node_count}",
+        f"- 港口能力表记录：{audit.port_capability_count}",
+        f"- 区域映射表记录：{audit.region_mapping_count}",
+        (
+            "- 作业费区域映射："
+            f"{audit.operation_fee_region_assignment_count} "
+            f"（已确认 {audit.confirmed_operation_fee_region_assignment_count}）"
+        ),
+        f"- 南港码头作业费记录：{audit.port_operation_fee_rate_count}",
         "",
         "## 2. 订单口径覆盖",
         "",
@@ -425,22 +607,55 @@ def render_markdown(audit: FoundationAudit) -> str:
             f"| {column.column} | {column.destination_label} | {column.vessel_type} | "
             f"{column.latest_value or ''} | {column.scope} | {column.note} |"
         )
-    if audit.unresolved_freight_locations or audit.unresolved_additional_fee_nodes:
-        lines.extend(["", "## 4. 需人工处理的节点", ""])
+    lines.extend(
+        [
+            "",
+            "## 4. W3/W5 数据接口接入状态",
+            "",
+            f"- 港口能力表：{audit.port_capability_file or '未接入'}；记录数={audit.port_capability_count}",
+            f"- 区域映射表：{audit.region_mapping_file or '未接入'}；记录数={audit.region_mapping_count}",
+            (
+                "- 作业费区域映射："
+                f"记录数={audit.operation_fee_region_assignment_count}；"
+                f"已确认={audit.confirmed_operation_fee_region_assignment_count}"
+            ),
+            f"- 南港码头作业费表：{audit.port_operation_fee_file or '未接入'}；记录数={audit.port_operation_fee_rate_count}",
+            f"- 港口能力表未绑定节点数：{audit.unresolved_port_capability_node_count}",
+            f"- 南港码头作业费未绑定节点数：{audit.unresolved_port_operation_fee_node_count}",
+        ]
+    )
+    for warning in audit.reference_warnings:
+        lines.append(f"- 接口提示：{warning}")
+    if (
+        audit.unresolved_freight_locations
+        or audit.unresolved_additional_fee_nodes
+        or audit.unresolved_port_capability_nodes
+        or audit.unresolved_port_operation_fee_nodes
+    ):
+        lines.extend(["", "## 5. 需人工处理的节点", ""])
         for name in audit.unresolved_freight_locations:
             lines.append(f"- 运价端点未注册：{name}")
         for name in audit.unresolved_additional_fee_nodes:
             lines.append(f"- AdditionalFee 节点未注册：{name}")
+        for name in audit.unresolved_port_capability_nodes:
+            lines.append(f"- 港口能力表节点未绑定：{name}")
+        for name in audit.unresolved_port_operation_fee_nodes:
+            lines.append(f"- 南港码头作业费节点未绑定：{name}")
     else:
-        lines.extend(["", "## 4. 需人工处理的节点", "", "- 当前运价端点和 AdditionalFee 节点均已能匹配现有节点注册表。"])
+        lines.extend(["", "## 5. 需人工处理的节点", "", "- 当前运价端点、AdditionalFee 节点和 W3/W5 接口节点均已能匹配现有节点注册表。"])
     lines.extend(
         [
             "",
-            "## 5. 使用建议",
+            "## 6. 使用建议",
             "",
             "- 若更换 Demo 订单，先看“订单口径覆盖”是否出现缺节点候选或人工复核激增。",
-            "- W2 前先处理散船运价表中 `project_scope_needs_confirmation` 和 `needs_review` 的目的标签。",
-            "- W3 前先补齐全部相关南港的节点画像、目的组映射、所在地标签和散粮/散船能力。",
+            "- 散船运价表中 `project_scope_needs_confirmation` 和 `needs_review` 的目的标签需要先人工确认后再进入主链。",
+            "- W3 表缺失时只输出接口提示，不猜测港口能力或区域映射；能力缺失不生成对应运输边。",
+            (
+                "- W5 优先使用码头精确费率；仅当标准 node_id 存在唯一已确认 "
+                "operation_fee_region_code 映射和唯一参考码头费率时使用 regional_proxy；"
+                "其余情况不计入，也不解释为 0。"
+            ),
         ]
     )
     return "\n".join(lines) + "\n"
@@ -465,6 +680,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"运价地点未注册：{audit.unresolved_freight_location_count}")
     print(f"AdditionalFee 节点未注册：{audit.unresolved_additional_fee_node_count}")
     print(f"散船运价表列数：{len(audit.bulk_columns)}")
+    print(f"港口能力表记录：{audit.port_capability_count}")
+    print(f"区域映射表记录：{audit.region_mapping_count}")
+    print(
+        "作业费区域映射："
+        f"{audit.operation_fee_region_assignment_count} "
+        f"（已确认 {audit.confirmed_operation_fee_region_assignment_count}）"
+    )
+    print(f"南港码头作业费记录：{audit.port_operation_fee_rate_count}")
     return 0
 
 

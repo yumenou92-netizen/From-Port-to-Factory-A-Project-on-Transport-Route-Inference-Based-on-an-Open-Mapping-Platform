@@ -19,6 +19,11 @@ from src.routing.bulk_shipping_provider import BulkRateColumn, BulkShippingWorkb
 from src.domain.freight_rate import create_freight_rate
 from src.geo.coordinate_provider import CoordinateResolution
 from src.geo.distance_provider import RoadRouteResult
+from src.routing.port_operation_fee_provider import (
+    PortOperationFeeRate,
+    PortOperationFeeRegionAssignment,
+    TablePortOperationFeeProvider,
+)
 
 
 def test_full_flow_prefers_real_rate_and_limits_placeholders_to_trunk(capsys):
@@ -72,6 +77,9 @@ def test_full_flow_prefers_real_rate_and_limits_placeholders_to_trunk(capsys):
     assert "汽运：钦州港 -> 客户工厂B；49000元" in output
     assert "已计入合计：73500元" in output
     assert "未计入项：AdditionalFee（原始记录已加载，逐条适用条件未确认）" in output
+    assert "南港码头作业费表=未接入（当前不计入；缺失不代表费用为 0）" in output
+    assert "未计入项：南港码头作业费（正式表未接入；缺失不解释为 0）" in output
+    assert "散船运费：24500元" in output
     assert "AdditionalFee 原始记录=1 条" in output
     assert "仅完成结构化加载，未计入本次总费用" in output
     assert "缺失不代表费用为 0" in output
@@ -137,6 +145,126 @@ def test_known_real_route_is_prioritized_over_closer_unknown_origin():
         trace.labels == (SOURCE_REAL_DATA, SOURCE_TENCENT)
         for trace in result.edge_sources.values()
     )
+
+
+def test_full_flow_includes_resolved_south_port_operation_fee(capsys):
+    result = build_full_flow_demo(
+        "北港A",
+        "客户工厂B",
+        bundle=make_bundle(),
+        coordinate_provider=FakeCoordinateProvider(),
+        road_route_provider=FakeRoadRouteProvider(),
+        candidate_limit=1,
+        bulk_workbook=make_bulk_workbook(),
+        port_operation_fee_provider=TablePortOperationFeeProvider(
+            (
+                PortOperationFeeRate(
+                    port_name="钦州港",
+                    package_type="散粮",
+                    fee_type="码头作业费",
+                    unit_price_yuan_per_ton=Decimal("8"),
+                    source="test_fee_table#row=1",
+                    node_id=make_node_id("钦州港"),
+                ),
+            )
+        ),
+        port_operation_fee_source="test_fee_table",
+    )
+
+    assert result.port_operation_fee_included_count == 1
+    assert result.recommendations.lowest_cost.total_cost_yuan == Decimal("93100")
+    trunk_segment = result.recommendations.lowest_cost.segments[0]
+    assert trunk_segment.cost_yuan == Decimal("44100")
+    assert [component.component_type for component in trunk_segment.cost_components] == [
+        "bulk_shipping_freight",
+        "south_port_operation_fee",
+    ]
+
+    print_full_flow_result(result)
+    output = capsys.readouterr().out
+    assert "南港码头作业费表=test_fee_table；已计入散船干线边=1 条" in output
+    assert "散船干线：北港A -> 钦州港；44100元" in output
+    assert "散船运费：24500元" in output
+    assert "码头作业费：19600元" in output
+    assert "已计入合计：93100元" in output
+
+
+def test_full_flow_includes_traceable_regional_proxy_operation_fee(capsys):
+    provider = TablePortOperationFeeProvider(
+        (
+            PortOperationFeeRate(
+                port_name="区域参考港",
+                package_type="散粮",
+                fee_type="码头作业费",
+                unit_price_yuan_per_ton=Decimal("8"),
+                source="test_fee_table#reference",
+                node_id="node-region-reference",
+                operation_fee_region_code="test-operation-fee-region",
+                is_region_reference=True,
+            ),
+        ),
+        region_assignments=(
+            PortOperationFeeRegionAssignment(
+                port_node_id=make_node_id("钦州港"),
+                operation_fee_region_code="test-operation-fee-region",
+                source="test_region_mapping#row=1",
+                mapping_basis="测试人工确认同一作业费区域",
+                mapping_rule_id="operation_fee_region_manual_mapping",
+                mapping_rule_version="1.0",
+                confirmation_status="confirmed",
+            ),
+        ),
+    )
+    result = build_full_flow_demo(
+        "北港A",
+        "客户工厂B",
+        bundle=make_bundle(),
+        coordinate_provider=FakeCoordinateProvider(),
+        road_route_provider=FakeRoadRouteProvider(),
+        candidate_limit=1,
+        bulk_workbook=make_bulk_workbook(),
+        port_operation_fee_provider=provider,
+        port_operation_fee_source="test_fee_table+test_region_mapping",
+    )
+
+    trunk_component = result.recommendations.lowest_cost.segments[0].cost_components[1]
+    assert trunk_component.source_type == "regional_proxy"
+    assert "参考码头node_id=node-region-reference" in trunk_component.calculation_detail
+    assert "不是目标码头精确真实费率" in trunk_component.calculation_detail
+
+    print_full_flow_result(result)
+    output = capsys.readouterr().out
+    assert "来源=经确认地域代理费率" in output
+
+
+def test_full_flow_excludes_candidate_with_missing_operation_fee_when_provider_is_connected():
+    result = build_full_flow_demo(
+        "北港A",
+        "客户工厂B",
+        bundle=make_bundle(),
+        coordinate_provider=FakeCoordinateProvider(),
+        road_route_provider=FakeRoadRouteProvider(),
+        candidate_limit=2,
+        bulk_workbook=make_bulk_workbook(),
+        port_operation_fee_provider=TablePortOperationFeeProvider(
+            (
+                PortOperationFeeRate(
+                    port_name="漳州港",
+                    package_type="散粮",
+                    fee_type="码头作业费",
+                    unit_price_yuan_per_ton=Decimal("6"),
+                    source="test_fee_table#row=2",
+                    node_id=make_node_id("漳州港"),
+                ),
+            )
+        ),
+        port_operation_fee_source="test_fee_table",
+    )
+
+    assert [port.name for port in result.candidate_ports] == ["漳州港"]
+    assert result.graph_edge_count == 2
+    assert result.port_operation_fee_included_count == 1
+    assert any("钦州港" in warning and "南港码头作业费未确认" in warning for warning in result.warnings)
 
 
 class FakeCoordinateProvider:

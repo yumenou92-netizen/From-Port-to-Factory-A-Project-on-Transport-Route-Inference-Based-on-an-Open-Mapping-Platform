@@ -86,6 +86,7 @@ def test_vessel_capacity_parses_single_values_and_ranges():
 
 def test_destination_classifier_uses_confirmed_business_groups():
     assert classify_bulk_shipping_destination("广州新港") == ("珠三角", "珠三角")
+    assert classify_bulk_shipping_destination("秀屿港") == ("秀屿", "福建")
     assert classify_bulk_shipping_destination("揭阳港") == ("揭阳", "珠三角")
     assert classify_bulk_shipping_destination("阳江港") == ("茂名/阳江", "粤西")
     assert classify_bulk_shipping_destination("钟山站") == (None, None)

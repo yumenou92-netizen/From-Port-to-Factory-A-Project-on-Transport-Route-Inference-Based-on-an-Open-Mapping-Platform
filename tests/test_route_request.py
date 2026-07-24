@@ -168,6 +168,7 @@ def test_route_request_normalizes_numeric_and_text_inputs():
         quantity_unit=" 吨 ",
         package_type=" 散粮 ",
         commodity=" 玉米 ",
+        trade_type=" 内贸 ",
         shipping_price_mode="index",
         shipping_time_hours="36",
     )
@@ -175,7 +176,19 @@ def test_route_request_normalizes_numeric_and_text_inputs():
     assert request.quantity == Decimal("12.5")
     assert request.quantity_unit == "吨"
     assert request.package_type == "散粮"
+    assert request.trade_type == "内贸"
     assert request.shipping_time_hours == Decimal("36")
+
+
+def test_route_request_defaults_to_domestic_trade_type():
+    request = RouteRequest(500, "吨", "散粮", "玉米")
+
+    assert request.trade_type == "内贸"
+
+
+def test_route_request_rejects_unknown_trade_type():
+    with pytest.raises(RouteRequestError, match="不支持的贸易类型"):
+        RouteRequest(500, "吨", "散粮", "玉米", trade_type="转口")
 
 
 @pytest.mark.parametrize("quantity", [0, -1, "bad"])

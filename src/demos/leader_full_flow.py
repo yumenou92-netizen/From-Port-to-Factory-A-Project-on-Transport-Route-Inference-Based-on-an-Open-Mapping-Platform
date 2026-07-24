@@ -15,7 +15,8 @@ from src.data.loaders import (
     load_real_data_bundle,
     make_node_id,
 )
-from src.domain.cost_rules import DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
+from src.data.port_reference import PortReferenceLoadError, load_port_reference_tables
+from src.domain.cost_rules import CostCalculationResult, DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
 from src.routing.bulk_shipping_provider import (
     BulkShippingWorkbook,
     make_bulk_shipping_cost_component,
@@ -33,6 +34,13 @@ from src.geo.tencent_map_provider import (
     TencentMapCoordinateProvider,
     TencentMapDrivingRouteProvider,
     TencentMapProviderError,
+)
+from src.routing.port_operation_fee_provider import (
+    PortOperationFeeError,
+    PortOperationFeeQuote,
+    SouthPortOperationFeeProvider,
+    TablePortOperationFeeProvider,
+    find_optional_port_operation_fee_file,
 )
 from src.routing.route_result import RouteRecommendationResults, RouteResult, build_route_recommendations
 from src.routing.route_search import search_cost_and_time_paths
@@ -102,6 +110,8 @@ class FullFlowDemoResult:
     warnings: tuple[str, ...]
     additional_fee_count: int
     trunk_edge_count: int
+    port_operation_fee_source: str | None
+    port_operation_fee_included_count: int
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -146,6 +156,8 @@ def build_full_flow_demo(
     road_route_provider: RoadRouteProvider,
     candidate_limit: int = MAX_TRANSFER_PORTS,
     bulk_workbook: BulkShippingWorkbook | None = None,
+    port_operation_fee_provider: SouthPortOperationFeeProvider | None = None,
+    port_operation_fee_source: str | None = None,
 ) -> FullFlowDemoResult:
     request = RouteRequest(
         quantity=ORDER_QUANTITY,
@@ -163,6 +175,14 @@ def build_full_flow_demo(
     )
 
     registry = bundle.node_registry or build_node_registry(bundle.nodes)
+    if port_operation_fee_provider is None:
+        (
+            port_operation_fee_provider,
+            port_operation_fee_source,
+        ) = _load_optional_port_operation_fee_provider(bundle.data_dir, registry)
+    elif port_operation_fee_source is None:
+        port_operation_fee_source = "injected_provider"
+
     known_rates, conflicted_origins = _known_last_mile_rates(
         bundle.freight_rates,
         request,
@@ -188,12 +208,26 @@ def build_full_flow_demo(
     edge_sources: dict[str, EdgeSourceTrace] = {}
     warnings: list[str] = []
     usable_ports: list[TransferPort] = []
+    included_operation_fee_count = 0
 
     for port in candidate_ports:
         trunk_match = bulk_workbook.match(port.name, request)
         if not trunk_match.is_resolved:
             warnings.append(f"候选节点 {port.name} 未形成散船干线段：{trunk_match.message}")
             continue
+        operation_fee_quote: PortOperationFeeQuote | None = None
+        if port_operation_fee_provider is not None:
+            operation_fee_quote = port_operation_fee_provider.quote(
+                port_name=port.name,
+                port_node_id=port.node_id,
+                request=request,
+            )
+            if not operation_fee_quote.is_resolved:
+                warnings.append(
+                    f"候选节点 {port.name} 未形成散船干线段："
+                    f"南港码头作业费未确认，{operation_fee_quote.message}"
+                )
+                continue
         road_result = road_route_provider.get_route(
             RoadRouteRequest(origin=port.point, destination=destination_point)
         )
@@ -207,7 +241,10 @@ def build_full_flow_demo(
             port,
             request,
             bulk_workbook,
+            operation_fee_quote=operation_fee_quote,
         )
+        if operation_fee_quote is not None and operation_fee_quote.is_resolved:
+            included_operation_fee_count += 1
         last_mile_edge, source_trace = _build_last_mile_edge(
             port,
             destination_node_id,
@@ -218,10 +255,13 @@ def build_full_flow_demo(
         )
         edges.extend((trunk_edge, last_mile_edge))
         usable_ports.append(port)
+        trunk_explanation = "费用来自真实散船运价表最新行；时间按领导确认分区纯航行天数换算为小时。"
+        if operation_fee_quote is not None and operation_fee_quote.is_resolved:
+            trunk_explanation += "南港码头作业费已通过正式 Provider 作为独立费用组成计入。"
         edge_sources[trunk_edge.edge_id] = EdgeSourceTrace(
             edge_id=trunk_edge.edge_id,
             labels=(SOURCE_REAL_DATA, SOURCE_CONFIRMED_TIME),
-            explanation="费用来自真实散船运价表最新行；时间按领导确认分区纯航行天数换算为小时。",
+            explanation=trunk_explanation,
         )
         edge_sources[last_mile_edge.edge_id] = source_trace
 
@@ -257,6 +297,8 @@ def build_full_flow_demo(
         warnings=tuple(warnings),
         additional_fee_count=len(bundle.additional_fees),
         trunk_edge_count=len(usable_ports),
+        port_operation_fee_source=port_operation_fee_source,
+        port_operation_fee_included_count=included_operation_fee_count,
     )
 
 
@@ -408,6 +450,8 @@ def _build_real_trunk_edge(
     port: TransferPort,
     request: RouteRequest,
     workbook: BulkShippingWorkbook,
+    *,
+    operation_fee_quote: PortOperationFeeQuote | None = None,
 ) -> TransportEdge:
     match = workbook.match(port.name, request)
     if not match.is_resolved:
@@ -421,6 +465,30 @@ def _build_real_trunk_edge(
         match,
     )
     cost_result = make_bulk_shipping_cost_result(request, match)
+    cost_components = [make_bulk_shipping_cost_component(match)]
+    if operation_fee_quote is not None:
+        if not operation_fee_quote.is_resolved:
+            raise FullFlowDemoError(f"候选节点 {port.name} 的南港码头作业费未确认：{operation_fee_quote.message}")
+        if operation_fee_quote.total_cost_yuan is None or operation_fee_quote.component is None:
+            raise FullFlowDemoError(f"候选节点 {port.name} 的南港码头作业费结果不完整。")
+        if cost_result.status == "valid" and cost_result.total_cost_yuan is not None:
+            total_cost = cost_result.total_cost_yuan + operation_fee_quote.total_cost_yuan
+            cost_result = CostCalculationResult(
+                status="valid",
+                total_cost_yuan=total_cost,
+                rule_id=cost_result.rule_id,
+                rule_version=cost_result.rule_version,
+                calculation_detail=(
+                    f"{cost_result.calculation_detail}；"
+                    f"{operation_fee_quote.component.calculation_detail}"
+                ),
+                price_source=cost_result.price_source,
+                transport_mode=cost_result.transport_mode,
+                rate_packaging=cost_result.rate_packaging,
+                price_unit=cost_result.price_unit,
+                message=f"{cost_result.message}；{operation_fee_quote.message}",
+            )
+            cost_components.append(operation_fee_quote.component)
     time_result = make_bulk_shipping_time_result(port.name, match)
     edge = build_transport_edge(
         rate,
@@ -429,11 +497,32 @@ def _build_real_trunk_edge(
         commodity=request.commodity,
         data_source="real_business_data:bulk_shipping_workbook",
         transport_stage="bulk_shipping_trunk",
-        cost_components=(make_bulk_shipping_cost_component(match),),
+        cost_components=tuple(cost_components),
     )
     if not edge.is_available:
         raise FullFlowDemoError(f"候选节点 {port.name} 未形成可搜索散船干线边：{edge.unavailable_reason}")
     return edge
+
+
+def _load_optional_port_operation_fee_provider(
+    data_dir: Path,
+    registry: NodeRegistry,
+) -> tuple[SouthPortOperationFeeProvider | None, str | None]:
+    try:
+        fee_file = find_optional_port_operation_fee_file(data_dir)
+        if fee_file is None:
+            return None, None
+        port_reference = load_port_reference_tables(data_dir, registry=registry)
+        return (
+            TablePortOperationFeeProvider.from_csv(
+                fee_file,
+                registry=registry,
+                region_assignments=port_reference.operation_fee_region_assignments,
+            ),
+            str(fee_file),
+        )
+    except (PortOperationFeeError, PortReferenceLoadError) as exc:
+        raise FullFlowDemoError(f"南港码头作业费表无法安全加载：{exc}") from exc
 
 
 def _build_last_mile_edge(
@@ -516,7 +605,8 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
     print(f"输入：北港 A={result.origin_name}；客户工厂 B={result.destination_name}")
     print(
         f"演示订单：{result.request.quantity}{result.request.quantity_unit}，"
-        f"{result.request.package_type}，{result.request.commodity}；客户画像=无自有码头（演示默认）"
+        f"{result.request.package_type}，{result.request.commodity}，{result.request.trade_type}；"
+        "客户画像=无自有码头（演示默认）"
     )
     print(
         f"坐标来源：北港={result.origin_resolution.source}；"
@@ -539,6 +629,14 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
         f"AdditionalFee 原始记录={result.additional_fee_count} 条"
         "（仅完成结构化加载，未计入本次总费用；缺失不代表费用为 0）"
     )
+    if result.port_operation_fee_source is None:
+        print("南港码头作业费表=未接入（当前不计入；缺失不代表费用为 0）")
+    else:
+        print(
+            f"南港码头作业费表={result.port_operation_fee_source}；"
+            f"已计入散船干线边={result.port_operation_fee_included_count} 条"
+            "（缺失或不匹配的候选不入图，不解释为 0）"
+        )
     print("候选南港（本次均已形成可搜索的南港至客户汽运段）：")
     for index, port in enumerate(result.candidate_ports, start=1):
         print(
@@ -571,6 +669,10 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
     print("- 领导确认规则：北港至南港纯航行时间按南港分区天数换算为小时。")
     print("- 演示占位数据：仅客户无自有码头画像。")
     print("- 暂未计入：AdditionalFee 仅完成原始记录加载；逐条适用条件未确认前不计入，也不解释为 0。")
+    if result.port_operation_fee_source is None:
+        print("- 暂未计入：南港码头作业费正式表未接入；当前不计入，也不解释为 0。")
+    else:
+        print("- 已接入：南港码头作业费表；未匹配作业费的候选南港不入图，不按 0 参与费用最优。")
     for warning in result.warnings:
         print(f"- 运行提示：{warning}")
 
@@ -614,11 +716,20 @@ def _print_cost_breakdown(route: RouteResult, result: FullFlowDemoResult) -> Non
             f"{start} -> {end}；{_format_decimal(segment.cost_yuan)}元；"
             f"数据口径={labels}；计费规则={segment.cost_rule_id}/{segment.cost_rule_version}"
         )
+        for component in segment.cost_components:
+            print(
+                f"     - {_cost_component_type_text(component.component_type)}："
+                f"{_format_decimal(component.amount_yuan)}元；"
+                f"来源={_component_source_type_text(component.source_type)}；"
+                f"计费规则={component.rule_id}/{component.rule_version}"
+            )
     print(f"  已计入合计：{_format_decimal(route.total_cost_yuan)}元")
     if result.additional_fee_count:
         print("  未计入项：AdditionalFee（原始记录已加载，逐条适用条件未确认）")
     else:
         print("  未计入项：AdditionalFee（当前无原始记录；缺失不解释为 0）")
+    if result.port_operation_fee_source is None:
+        print("  未计入项：南港码头作业费（正式表未接入；缺失不解释为 0）")
 
 
 def _source_label_text(label: str) -> str:
@@ -643,6 +754,22 @@ def _transport_mode_text(transport_mode: str) -> str:
     if transport_mode == "散船":
         return "散船干线"
     return transport_mode
+
+
+def _cost_component_type_text(component_type: str) -> str:
+    return {
+        "bulk_shipping_freight": "散船运费",
+        "south_port_operation_fee": "码头作业费",
+    }.get(component_type, component_type)
+
+
+def _component_source_type_text(source_type: str) -> str:
+    return {
+        "real_data": "真实业务数据",
+        "confirmed_rule": "已确认计费规则",
+        "regional_proxy": "经确认地域代理费率",
+        "demo_placeholder": "演示占位数据",
+    }.get(source_type, source_type)
 
 
 def _route_has_vessel_time_gap(route: RouteResult) -> bool:

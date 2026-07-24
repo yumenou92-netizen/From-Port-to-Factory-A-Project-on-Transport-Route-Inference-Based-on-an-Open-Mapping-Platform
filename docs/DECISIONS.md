@@ -2,7 +2,7 @@
 
 This document records durable business and technical decisions. Add new decisions when rules change.
 
-Updated: 2026-07-23
+Updated: 2026-07-24
 
 ## D-001: Prototype Scope
 
@@ -680,3 +680,127 @@ Implications:
 - Inland-waterway fee/time records must preserve cost unit, time scope, rule id/version, and source type.
 - Demo barge edges are allowed only for Fujian/闽江 and Pearl Delta cases and must use `transport_stage=barge_last_mile`, explicit `demo_placeholder` fee/time sources, and non-zero positive cost/time.
 - Missing inland-waterway capability, unmatched region, cross-region endpoints, unsupported package/commodity, or absent fee/time record means no barge edge is generated; the system must not create a zero-cost or guessed edge.
+
+## D-034: W3/W5 Tables Are Source Interfaces, Not Default Rules
+
+Date: 2026-07-24
+
+Decision:
+
+`秀屿` is confirmed as an in-scope Fujian bulk-shipping destination label. `秀屿港` refers to the port at 福建省莆田市秀屿区东庄镇莆头村, with confirmed coordinate source text `25.216168,118.988634` where the project should store longitude `118.988634` and latitude `25.216168`.
+
+W3 port capability and regional mapping data are loaded only from explicit source tables such as `港口能力表.csv` and `区域映射表.csv`. Missing W3 records mean missing capability or missing mapping; the system must audit the gap and must not infer eligibility merely from a freight-rate origin name.
+
+W5 south-port operation fees are loaded through a separate Provider as one aggregate `码头作业费` component for the first version. The current bulk-grain path uses `元/吨`; containerized operation-fee records may be preserved as `元/箱` for future use. Missing, duplicated, trade-type-mismatched, commodity-mismatched, unit-mismatched, or order-mismatched operation-fee records return `manual_review` without a usable amount; they are not interpreted as zero and are not silently included in graph-search cost.
+
+Reason:
+
+The project needs full real-data coverage without expanding placeholder behavior. Confirming `秀屿` removes one known mapping blocker, while W3/W5 tables create explicit data contracts for future business maintenance. Keeping missing operation fees out of totals prevents under-quoting and preserves the minimum-fabrication principle.
+
+Implications:
+
+- Bulk-shipping classification may map `秀屿港` to destination group `秀屿` and pure-sailing time region `福建`.
+- `data_foundation_audit` must show W3/W5 table paths, record counts, unresolved node bindings, and missing-table warnings.
+- Operation-fee totals may enter route cost only after a matching positive record exists for the current south port, package type, trade type, commodity scope, and exact order unit (`元/吨` for `吨`, `元/箱` for `箱`). No `吨`/`箱`/`柜` conversion is allowed.
+- When a formal operation-fee provider is connected to `leader_full_flow`, a candidate south port with missing or unsafe operation-fee data must be excluded from the searchable graph with a warning, not retained as an implicit zero-fee candidate.
+- W3/W5 source tables should be maintained from tested templates under `docs/data_templates/`; the committed templates must use synthetic examples rather than real business rows.
+- A `demo_placeholder` operation-fee Provider may be used only when explicitly selected for presentation or experimentation; it is not the default formal-data fallback.
+- `AdditionalFee` raw records remain separate until their stage attribution and duplicate rules are confirmed.
+
+## D-035: Port-Label JSON Is A Candidate Source For Operation-Fee Audit
+
+Date: 2026-07-24
+
+Decision:
+
+The leader-provided `部分码头标签.json` may assist W3/W5 data construction, but it is not the formal operation-fee table. In the current prototype, only `serviceFees.入库` is mapped to a candidate aggregate `码头作业费` unit rate. For `散粮`, the unit is `元/吨`; for future containerized records, the reserved unit is `元/箱`.
+
+Every operation-fee rule must preserve `tradeType` as a matching dimension. The project mainly studies domestic trade (`内贸`) now, but the data model and Provider must also support `外贸`. The same port may have different operation-fee rates by commodity, trade type, and packaging mode; route calculation may only use a rate that exactly matches the current order dimensions.
+
+Alias handling must follow a conservative sequence: first check the maintained name dictionary, then use Tencent Maps API candidate search, then require human confirmation. The audit converter may report direct node matches and unmatched names, but it must not automatically register aliases, write coordinates, or write the formal `南港码头作业费.csv`.
+
+For the dictionary-first audit pass, a label may bind to an existing node only when removing one maintained port suffix (`港`, `码头`, `港区`, or `作业区`) makes the texts exactly equal and every resolvable dictionary candidate points to one node ID. This binding is audit-local evidence, not a new alias registration. Broader containment matches may only expand Tencent query terms.
+
+Reason:
+
+The JSON file is useful business signal, but it mixes port labels, factory labels, aliases, trade type, commodity scope, and service-fee rules. Treating it as a candidate source preserves momentum while preventing silent fee attribution, duplicate node creation, or under-specified alias acceptance.
+
+Implications:
+
+- `RouteRequest` must carry a `trade_type` dimension; the default can be `内贸`, but unsupported values must be rejected.
+- W5 operation-fee matching must include south-port node/name, package type, trade type, commodity scope, fee type, and exact fee unit.
+- Zero, missing, invalid, duplicated, unmatched, or ambiguous `入库` rows remain manual-review rows and do not create usable cost.
+- `部分码头标签.json` audit output belongs in ignored local `output/`; reviewed rows may later be copied manually into formal W3/W5 CSV tables.
+- Railway dictionary rows are excluded from W5 port-operation-fee query expansion.
+- Tencent API is part of alias/candidate investigation only; cost rules and Providers still must not call Tencent directly.
+
+## D-036: Factory-Bound Terminal Labels Represent Customer-Owned Ports
+
+Date: 2026-07-24
+
+Decision:
+
+When a reviewed terminal label is explicitly bound to a customer factory or customer company node, the terminal is classified as that customer's own port (`客户自有码头`). The factory/company name remains the canonical node identity and the terminal label is retained as a source-backed alias; the system must not create a second unrelated public-port node for the same confirmed location.
+
+This identity decision does not prove port operating capability, inland-waterway connectivity, packaging support, commodity support, or an applicable operation-fee amount. Those dimensions still require explicit W3/W5 source records. In particular, a zero `入库` value in the partial label JSON is not converted into a usable zero-cost fee merely because the label is bound to a customer factory.
+
+Reason:
+
+Customer factories may use their own wharf names in business data. Treating the wharf and factory as unrelated nodes would duplicate one physical delivery destination and could incorrectly add a final truck segment. At the same time, node identity alone is insufficient evidence for transport capability or pricing.
+
+Implications:
+
+- `肇庆福加德码头` is an alias of `广东加福加德食品有限公司` and is classified as a customer-owned port.
+- Future human-confirmed factory/terminal bindings follow the same rule.
+- Customer-owned-port delivery may terminate at the customer node, but the full-flow branch still requires a formal customer profile/capability source before it replaces the current default “无自有码头” presentation profile.
+- Partial W5 data must not be activated under the formal file name until its intended coverage and missing-fee behavior are accepted; otherwise the strict Provider would exclude uncovered south-port candidates.
+
+## D-037: W5 Operation-Fee Regional Proxy Uses Explicit Maintained Node Mapping
+
+Date: 2026-07-24
+
+Decision:
+
+South-port operation-fee matching follows one strict order:
+
+1. an applicable exact rate for the target port's standard `node_id`;
+2. one applicable reference-port rate from the target port's uniquely confirmed `operation_fee_region_code`;
+3. `manual_review` without a usable amount.
+
+The machine definition of "nearby" for this rule is not same-city text and is not the geographically nearest coordinate. It is membership in one manually maintained `operation_fee_region_code`. The mapping must explicitly list standard port `node_id` values and preserve its source, mapping basis, rule ID, rule version, confirmation status, and maintenance date. City keywords, port-name containment, and coordinates must not create an operation-fee regional assignment.
+
+A regional result uses the formal cost source type `regional_proxy`. It must preserve the reference port node ID and mapping trace and must state that the rate is not the target port's exact real rate. Missing node ID, missing or unconfirmed mapping, multiple confirmed mappings, missing reference rate, or multiple applicable reference rates returns `manual_review`; none of these cases is zero cost.
+
+Reason:
+
+Business users may temporarily apply a known port's operation fee to nearby ports with similar conditions, but geographic proximity alone does not prove fee equivalence. Explicit maintained membership provides a deterministic and auditable prototype rule while preventing inferred fees from being presented as target-port real data.
+
+Implications:
+
+- `区域映射表.csv` carries explicit operation-fee node assignments and mapping trace; keyword matching remains available for other audited region uses but is not used to create W5 fee assignments.
+- `南港码头作业费.csv` may mark a real rate as the reference rate for one `operation_fee_region_code`; the reference row requires its own standard node ID.
+- Exact applicable target-port data always wins over regional proxy data.
+- `regional_proxy` is a non-placeholder derived source. It is neither `real_data` for the target port nor `demo_placeholder`.
+- Formal W5 data remains local business data and must not be committed.
+
+## D-038: Route-Relevant Port And Customer Tags Preserve Unknown State
+
+Date: 2026-07-24
+
+Decision:
+
+Route-planning profiles retain only fields that affect route feasibility or cost selection: stable node/customer IDs, infrastructure type, supported packaging, commodities and transport modes, region/city/time-region labels, customer-to-private-terminal relation, source, maintenance date, and confirmation status.
+
+Port capability values are three-state. `True` and `False` are allowed only for confirmed support and confirmed non-support; an unmaintained capability is `None`/blank and remains an audit gap. The formal port capability table is not activated as a `leader_full_flow` route filter in this phase.
+
+A customer profile or customer-owned-terminal relation must be explicitly confirmed before it can produce an executable route branch. An unconfirmed profile remains `manual_review` even when some individual fields are present.
+
+Reason:
+
+Treating unknown capability as false would silently remove feasible routes, while treating it as true would create physically unsupported edges. Stable, source-backed relations also reduce future file/database adapter changes without turning the current route-planning task into a database project.
+
+Implications:
+
+- W3 loaders and audit output preserve blank capability values instead of coercing them to false.
+- Customer-owned-terminal identity remains separate from evidence of port capability, packaging support, waterway connectivity, or fee applicability.
+- Database, ORM, API, and administration UI work remain outside Phase 18; future adapters should return the same domain contracts.
