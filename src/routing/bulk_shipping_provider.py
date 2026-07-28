@@ -17,7 +17,7 @@ from src.routing.transport_contracts import CostComponent
 
 BULK_SHIPPING_RULE_ID = "bulk_shipping_real_workbook_rate"
 BULK_SHIPPING_RULE_VERSION = "1.0"
-BULK_SHIPPING_TIME_RULE_ID = "bulk_shipping_region_pure_sailing_time"
+BULK_SHIPPING_TIME_RULE_ID = "bulk_shipping_region_complete_segment_time"
 BULK_SHIPPING_TIME_RULE_VERSION = "1.0"
 
 PROJECT_DESTINATION_LABELS = {
@@ -161,7 +161,7 @@ class BulkShippingWorkbook:
         if destination_label is None or time_region is None:
             return BulkShippingMatch(
                 status="manual_review",
-                message=f"南港 {port_name} 缺少已确认散船费率目的组或纯航行时效分区。",
+                message=f"南港 {port_name} 缺少已确认散船费率目的组或航运总时效分区。",
             )
         candidate_columns = [
             column
@@ -222,7 +222,7 @@ class BulkShippingWorkbook:
             status="resolved",
             message=(
                 f"已匹配目的组 {destination_label}、船型 {selected_column.vessel_type}；"
-                f"纯航行时效分区 {time_region}={days}天。"
+                f"航运总时效分区 {time_region}={days}天。"
             ),
             rate_column=selected_column,
             destination_label=destination_label,
@@ -348,26 +348,26 @@ def make_bulk_shipping_time_result(port_name: str, match: BulkShippingMatch) -> 
         return ShippingTimeResult(
             status="manual_review",
             duration_hours=None,
-            source="confirmed_region_pure_sailing_time",
+            source="confirmed_region_shipping_total_time",
             message=match.message,
             stage=f"北港至{port_name}",
             transport_mode="散船",
-            time_scope="pure_sailing",
+            time_scope="complete_segment",
         )
     days = REGION_DAYS[match.shipping_time_region]
     return ShippingTimeResult(
         status="resolved",
         duration_hours=match.duration_hours,
-        source="confirmed_region_pure_sailing_time",
+        source="confirmed_region_shipping_total_time",
         message=(
-            f"已按领导确认口径采用{match.shipping_time_region}纯航行时效："
-            f"{days}天×24={match.duration_hours}小时。"
+            f"已按领导确认口径采用{match.shipping_time_region}航运总时效："
+            f"{days}天×24={match.duration_hours}小时；模型不拆分等待、装卸和航行组成。"
         ),
         stage=f"北港至{port_name}",
         transport_mode="散船",
         input_value=str(days),
         input_unit="天",
-        time_scope="pure_sailing",
+        time_scope="complete_segment",
     )
 
 

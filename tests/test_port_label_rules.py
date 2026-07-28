@@ -4,11 +4,17 @@ from decimal import Decimal
 from src.data.loaders import NodeRecord, make_node_id
 from src.data.name_dictionary import NameDictionaryEntry
 from src.data.port_label_rules import (
+    W5_ADMISSION_ELIGIBLE,
+    W5_ADMISSION_PENDING_FEE_MEANING,
+    W5_ADMISSION_PENDING_NODE,
+    build_w5_formal_rows,
+    build_w5_admission_review_rows,
     collect_port_label_tencent_locations,
     load_port_label_rule_bundle,
     match_port_label_name,
     port_label_tencent_review_to_row,
     query_port_label_tencent_candidates,
+    render_w5_admission_review_markdown,
 )
 from src.domain.node_registry import build_node_registry
 from src.geo.coordinate_provider import CoordinateResolution
@@ -228,3 +234,113 @@ class RecordingProvider:
             message="test",
             source_confidence="top1",
         )
+
+
+def test_w5_admission_review_separates_eligible_node_and_fee_meaning_groups():
+    common = {
+        "package_type": "散粮",
+        "trade_type": "内贸",
+        "commodity_scope": "玉米；小麦",
+        "fee_unit": "元/吨",
+        "registry_match_status": "direct",
+        "source": "部分码头标签.json#rule=1:入库",
+        "issue": "",
+    }
+    rows = build_w5_admission_review_rows(
+        (
+            {
+                **common,
+                "port_name": "示例港A",
+                "canonical_name": "示例港A",
+                "node_id": "node-a",
+                "unit_price": "20",
+                "conversion_status": "converted",
+            },
+            {
+                **common,
+                "port_name": "示例港B",
+                "canonical_name": "",
+                "node_id": "",
+                "unit_price": "25",
+                "conversion_status": "converted",
+                "registry_match_status": "unmatched",
+            },
+            {
+                **common,
+                "port_name": "示例客户C",
+                "canonical_name": "",
+                "node_id": "",
+                "unit_price": "0",
+                "conversion_status": "manual_review",
+                "issue": "入库费率必须大于 0。",
+            },
+        )
+    )
+
+    assert [row["建议处理状态"] for row in rows] == [
+        W5_ADMISSION_ELIGIBLE,
+        W5_ADMISSION_PENDING_NODE,
+        W5_ADMISSION_PENDING_FEE_MEANING,
+    ]
+    assert all(row["人工确认结果"] == "" for row in rows)
+    markdown = render_w5_admission_review_markdown(rows)
+    assert "可申请准入：1 条" in markdown
+    assert "节点待确认：1 条" in markdown
+    assert "费用含义待确认：1 条" in markdown
+    assert "不会自动写入 `南港码头作业费.csv`" in markdown
+
+
+def test_w5_formal_rows_admit_bound_positive_and_customer_owned_zero_but_ignore_unbound():
+    rows = build_w5_formal_rows(
+        (
+            {
+                "port_name": "示例港A",
+                "canonical_name": "标准港A",
+                "node_id": "node-a",
+                "package_type": "散粮",
+                "trade_type": "内贸",
+                "fee_type": "码头作业费",
+                "unit_price": "8",
+                "fee_unit": "元/吨",
+                "commodity_scope": "玉米；小麦",
+                "source": "source#1",
+                "conversion_status": "converted",
+            },
+            {
+                "port_name": "客户自有码头B",
+                "canonical_name": "",
+                "node_id": "",
+                "package_type": "散粮",
+                "trade_type": "内贸",
+                "fee_type": "码头作业费",
+                "unit_price": "0",
+                "fee_unit": "元/吨",
+                "commodity_scope": "玉米；小麦",
+                "source": "source#2",
+                "conversion_status": "manual_review",
+            },
+            {
+                "port_name": "未绑定港C",
+                "canonical_name": "",
+                "node_id": "",
+                "package_type": "散粮",
+                "trade_type": "内贸",
+                "fee_type": "码头作业费",
+                "unit_price": "9",
+                "fee_unit": "元/吨",
+                "commodity_scope": "玉米",
+                "source": "source#3",
+                "conversion_status": "converted",
+            },
+        ),
+        approve_zero_as_customer_owned_exemption=True,
+        confirmation_source="business_confirmation",
+        maintained_at="2026-07-27",
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["适用状态"] == "chargeable"
+    assert rows[0]["标准节点ID"] == "node-a"
+    assert rows[1]["适用状态"] == "not_applicable"
+    assert rows[1]["单价"] == "0"
+    assert "客户自有码头" in rows[1]["不适用原因"]

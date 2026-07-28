@@ -610,9 +610,9 @@ Date: 2026-07-23
 
 Decision:
 
-In automatic recommendation mode, a candidate south-port node can receive a north-to-south bulk-shipping trunk edge only when it is eligible for sea-going bulk grain shipping and can be mapped to a confirmed bulk-rate destination group and pure-sailing time region. Inland ports, rail stations, factories, warehouses, or unmatched nodes must not receive synthetic north-to-south sea-shipping edges merely because they appear as origins in maintained last-mile truck rates.
+In automatic recommendation mode, a candidate south-port node can receive a north-to-south bulk-shipping trunk edge only when it is eligible for sea-going bulk grain shipping and can be mapped to a confirmed bulk-rate destination group and complete-segment shipping-time region. Inland ports, rail stations, factories, warehouses, or unmatched nodes must not receive synthetic north-to-south sea-shipping edges merely because they appear as origins in maintained last-mile truck rates.
 
-If the user explicitly specifies a south port, the north-port-to-south-port trunk segment is treated as a fixed user-selected segment: calculate its freight and pure-sailing time directly, then reduce the graph search problem to south-port-to-customer routing. The fixed trunk segment is added back into the final total and explanation, but it does not compete against other south ports inside the graph.
+If the user explicitly specifies a south port, the north-port-to-south-port trunk segment is treated as a fixed user-selected segment: calculate its freight and complete-segment shipping time directly, then reduce the graph search problem to south-port-to-customer routing. The fixed trunk segment is added back into the final total and explanation, but it does not compete against other south ports inside the graph.
 
 Reason:
 
@@ -621,7 +621,7 @@ Some maintained south-port-to-customer truck-rate origins are inland ports or no
 Implications:
 
 - Automatic full-flow must exclude candidates that lack confirmed bulk-shipping destination/time mapping and report the exclusion reason.
-- Node profiles remain the target long-term source for infrastructure type, capabilities, standard location, rate destination group, and pure-sailing time region.
+- Node profiles remain the target long-term source for infrastructure type, capabilities, standard location, rate destination group, and complete-segment shipping-time region.
 - Name-based rules in interim code are only a transition mechanism until node profiles are fully maintained; missing or ambiguous mapping must not be silently guessed.
 - Manual south-port mode is a separate implementation path and should not be emulated by adding zero-cost or forced edges into the north-to-south candidate graph.
 
@@ -631,18 +631,18 @@ Date: 2026-07-23
 
 Decision:
 
-The only vessel-time standard currently confirmed for route search is the north-port-to-south-port bulk-shipping pure-sailing regional rule. Barge sailing time, railway time, port operation time, waiting time, loading time, unloading time, storage time, and short-transfer time are not available as formal data sources in the current prototype.
+This decision's description of bulk-shipping time as `pure_sailing` and its requirement to decompose missing vessel-time components are superseded by D-039. The remaining rule is still valid: an unconfigured transport segment has no usable time and must not be defaulted to zero.
 
-Any route output that includes a vessel segment must warn that the vessel time is incomplete: bulk-shipping trunk time is pure sailing only, and other vessel-related time categories remain missing unless a future provider explicitly supplies them.
+Any route output that includes a vessel segment whose complete-segment time is not configured must warn about that missing time. A configured business “航行时效” is treated according to D-039.
 
 Reason:
 
-Without this warning, users may incorrectly interpret route total time as door-to-door operational time. The current route time is useful for comparing the implemented prototype options, but it is not a complete ETA for execution or production dispatch.
+Without this warning, users may incorrectly interpret a route containing an unconfigured transport segment as complete. A route whose every segment has a confirmed `complete_segment` or road-driving time can be compared under the current simplified model, but production dispatch accuracy remains dependent on the quality and maintenance of those source rules.
 
 Implications:
 
-- `leader_full_flow` must display a time-risk warning when recommended paths include bulk shipping or future barge segments.
-- Future barge/rail/operation-time providers must preserve `time_scope` and source trace separately from pure sailing and road driving.
+- `leader_full_flow` must display a warning when a recommended or attempted vessel segment has no configured complete-segment time.
+- Future barge/rail time providers must preserve `time_scope` and source trace separately from road driving.
 - Missing vessel or operation time must remain missing/manual-review; it must not be defaulted to zero or hidden inside another segment.
 
 ## D-033: Inland Waterway Scope, Port Capability, And Regional Mapping
@@ -651,18 +651,18 @@ Date: 2026-07-23
 
 Decision:
 
-For the current prototype, inland-waterway transport is only considered in two business regions:
+For the current prototype, inland-waterway transport is considered in two business corridors:
 
 1. Fujian inland waterway centered on 马尾港 and the 闽江 channel;
-2. Pearl Delta inland waterway centered on Guangzhou, Shenzhen, and Dongguan sea-river integrated ports and the 东江/西江 channel system.
+2. Pearl Delta–West River inland waterway centered on Pearl Delta sea-river integrated ports and extending through the maintained Wuzhou, Pingnan, Yulin-region, Guigang, Nanning, and Baise mappings.
 
-Other regions must not automatically generate inland-waterway barge edges.
+The Pearl Delta time region includes Guangzhou, Shenzhen, Dongguan, Foshan, Zhaoqing, Jiangmen, Zhongshan, and Zhuhai. Ports mapped to the Yulin region use the Yulin regional rule. Other corridors must not automatically generate inland-waterway barge edges.
 
 Port-to-port connectivity is graph connectivity: a transport edge may exist only when the two endpoint nodes have compatible transport stage, cargo handling capability, packaging, and commodity capability. Geography alone is not enough to connect two ports by sea or inland waterway.
 
-North-port-to-south-port bulk-shipping freight and pure-sailing time continue to use confirmed mapping logic: map a south-port node to a destination freight group and time region by its city/nearby regional label, using the nearest reasonable business mapping when the port itself is not a direct workbook column. This mapping must be traceable and must not silently classify unmatched inland ports, rail stations, factories, or warehouses as sea-going bulk-shipping destinations.
+North-port-to-south-port bulk-shipping freight and complete-segment shipping time continue to use confirmed mapping logic: map a south-port node to a destination freight group and time region by its city/nearby regional label, using the nearest reasonable business mapping when the port itself is not a direct workbook column. This mapping must be traceable and must not silently classify unmatched inland ports, rail stations, factories, or warehouses as sea-going bulk-shipping destinations.
 
-Inland-waterway barge freight and sailing-time data are recognized as future formal data sources, but they are not yet loaded from a real table. Until formal records exist, a demo Provider may generate barge edges only in the two supported regions above, and every generated fee/time component must be marked `demo_placeholder`.
+Inland-waterway barge freight and time remain separate sources. Regional complete-segment time may be loaded from a local real table, but formal freight and port capabilities are not yet sufficient for real graph edges. Until those edge prerequisites exist, a demo Provider may generate barge edges only in the supported regions above, and every demo fee/time component must be marked `demo_placeholder`.
 
 For this model version, customer factory and customer terminal are treated as the same delivery endpoint unless a later formal customer-terminal table provides a distinct node.
 
@@ -674,11 +674,11 @@ Leadership clarified that inland-waterway capability is region-specific and carg
 
 Implications:
 
-- Add and maintain three explicit data interfaces: port capability table, regional mapping table, and inland-waterway barge fee/time table.
+- Add and maintain explicit data interfaces for port capabilities, regional mappings, inland-waterway barge freight, and inland-waterway complete-segment time.
 - Port capability records must express supported stages and supported cargo/packaging capability before they create graph connectivity.
 - Regional mapping records must keep the source and destination group/time-region trace used for bulk-shipping or inland-waterway lookup.
 - Inland-waterway fee/time records must preserve cost unit, time scope, rule id/version, and source type.
-- Demo barge edges are allowed only for Fujian/闽江 and Pearl Delta cases and must use `transport_stage=barge_last_mile`, explicit `demo_placeholder` fee/time sources, and non-zero positive cost/time.
+- Demo barge edges remain limited to the existing Fujian/闽江 and Pearl Delta same-region examples and must use `transport_stage=barge_last_mile`, explicit `demo_placeholder` fee/time sources, and non-zero positive cost/time. Extending real graph edges along the Pearl Delta–West River corridor still requires applicable formal freight and confirmed endpoint capabilities.
 - Missing inland-waterway capability, unmatched region, cross-region endpoints, unsupported package/commodity, or absent fee/time record means no barge edge is generated; the system must not create a zero-cost or guessed edge.
 
 ## D-034: W3/W5 Tables Are Source Interfaces, Not Default Rules
@@ -693,13 +693,15 @@ W3 port capability and regional mapping data are loaded only from explicit sourc
 
 W5 south-port operation fees are loaded through a separate Provider as one aggregate `码头作业费` component for the first version. The current bulk-grain path uses `元/吨`; containerized operation-fee records may be preserved as `元/箱` for future use. Missing, duplicated, trade-type-mismatched, commodity-mismatched, unit-mismatched, or order-mismatched operation-fee records return `manual_review` without a usable amount; they are not interpreted as zero and are not silently included in graph-search cost.
 
+D-040 refines the treatment of a source-backed zero row: a confirmed customer-owned-terminal exemption is an explicit `not_applicable` rule, not a missing fee and not a normal zero-priced rate.
+
 Reason:
 
 The project needs full real-data coverage without expanding placeholder behavior. Confirming `秀屿` removes one known mapping blocker, while W3/W5 tables create explicit data contracts for future business maintenance. Keeping missing operation fees out of totals prevents under-quoting and preserves the minimum-fabrication principle.
 
 Implications:
 
-- Bulk-shipping classification may map `秀屿港` to destination group `秀屿` and pure-sailing time region `福建`.
+- Bulk-shipping classification may map `秀屿港` to destination group `秀屿` and complete-segment shipping-time region `福建`.
 - `data_foundation_audit` must show W3/W5 table paths, record counts, unresolved node bindings, and missing-table warnings.
 - Operation-fee totals may enter route cost only after a matching positive record exists for the current south port, package type, trade type, commodity scope, and exact order unit (`元/吨` for `吨`, `元/箱` for `箱`). No `吨`/`箱`/`柜` conversion is allowed.
 - When a formal operation-fee provider is connected to `leader_full_flow`, a candidate south port with missing or unsafe operation-fee data must be excluded from the searchable graph with a warning, not retained as an implicit zero-fee candidate.
@@ -717,7 +719,7 @@ The leader-provided `部分码头标签.json` may assist W3/W5 data construction
 
 Every operation-fee rule must preserve `tradeType` as a matching dimension. The project mainly studies domestic trade (`内贸`) now, but the data model and Provider must also support `外贸`. The same port may have different operation-fee rates by commodity, trade type, and packaging mode; route calculation may only use a rate that exactly matches the current order dimensions.
 
-Alias handling must follow a conservative sequence: first check the maintained name dictionary, then use Tencent Maps API candidate search, then require human confirmation. The audit converter may report direct node matches and unmatched names, but it must not automatically register aliases, write coordinates, or write the formal `南港码头作业费.csv`.
+Alias handling must follow a conservative sequence: first check the maintained name dictionary, then use Tencent Maps API candidate search, then require human confirmation. The audit converter may report direct node matches and unmatched names, but it must not automatically register aliases or write coordinates. Formal W5 output is written only after explicit user approval and an explicit apply command; ordinary audit remains read-only.
 
 For the dictionary-first audit pass, a label may bind to an existing node only when removing one maintained port suffix (`港`, `码头`, `港区`, or `作业区`) makes the texts exactly equal and every resolvable dictionary candidate points to one node ID. This binding is audit-local evidence, not a new alias registration. Broader containment matches may only expand Tencent query terms.
 
@@ -729,7 +731,7 @@ Implications:
 
 - `RouteRequest` must carry a `trade_type` dimension; the default can be `内贸`, but unsupported values must be rejected.
 - W5 operation-fee matching must include south-port node/name, package type, trade type, commodity scope, fee type, and exact fee unit.
-- Zero, missing, invalid, duplicated, unmatched, or ambiguous `入库` rows remain manual-review rows and do not create usable cost.
+- Zero rows remain manual review unless D-040's customer-owned-terminal non-applicability has been explicitly confirmed. Missing, invalid, duplicated, unmatched, or ambiguous rows do not create usable cost.
 - `部分码头标签.json` audit output belongs in ignored local `output/`; reviewed rows may later be copied manually into formal W3/W5 CSV tables.
 - Railway dictionary rows are excluded from W5 port-operation-fee query expansion.
 - Tencent API is part of alias/candidate investigation only; cost rules and Providers still must not call Tencent directly.
@@ -742,7 +744,7 @@ Decision:
 
 When a reviewed terminal label is explicitly bound to a customer factory or customer company node, the terminal is classified as that customer's own port (`客户自有码头`). The factory/company name remains the canonical node identity and the terminal label is retained as a source-backed alias; the system must not create a second unrelated public-port node for the same confirmed location.
 
-This identity decision does not prove port operating capability, inland-waterway connectivity, packaging support, commodity support, or an applicable operation-fee amount. Those dimensions still require explicit W3/W5 source records. In particular, a zero `入库` value in the partial label JSON is not converted into a usable zero-cost fee merely because the label is bound to a customer factory.
+This identity decision does not prove port operating capability, inland-waterway connectivity, packaging support, commodity support, or an applicable operation-fee amount. Those dimensions still require explicit W3/W5 source records. D-040 now confirms a narrow exception for the reviewed current batch: the two business-confirmed customer-owned-terminal zero rows are explicit operation-fee non-applicability rules.
 
 Reason:
 
@@ -804,3 +806,55 @@ Implications:
 - W3 loaders and audit output preserve blank capability values instead of coercing them to false.
 - Customer-owned-terminal identity remains separate from evidence of port capability, packaging support, waterway connectivity, or fee applicability.
 - Database, ORM, API, and administration UI work remain outside Phase 18; future adapters should return the same domain contracts.
+
+## D-039: Business Sailing Duration Equals Complete Shipping-Segment Time
+
+Date: 2026-07-27
+
+Decision:
+
+In the current simplified route-planning model, the business field called “航行时效” is the total time of the corresponding shipping segment. The model does not split that time into waiting, loading, physical sailing, unloading, or other operational components.
+
+This rule applies consistently to north-port-to-south-port bulk shipping and inland-waterway barge transport. Their `TransportEdge.time_scope` is `complete_segment`; `pure_sailing` remains a generic interface value only and is not the active scope for these two modeled shipping stages.
+
+An absent regional time rule remains missing and must return exclusion or manual review. It must not be replaced with zero, a road duration, or a guessed component sum. A time rule by itself does not authorize a graph edge: applicable freight, endpoint capability, packaging/commodity compatibility, and source trace are still required.
+
+Reason:
+
+Leadership time standards are maintained as complete business transport durations. Decomposing them would introduce unsupported assumptions and could double-count future operational items. Treating the supplied value as the whole shipping segment keeps the prototype simple and auditable.
+
+Implications:
+
+- Bulk-shipping and barge time Providers convert maintained days directly to hours and emit `time_scope=complete_segment`.
+- Display text may retain the familiar term “航行时效”, but must explain that it represents the complete shipping-segment time in this model.
+- The project does not add separate waiting/loading/sailing/unloading time placeholders while a complete-segment rule is present.
+- Regional barge time may be loaded independently from barge freight, but no searchable barge edge is created until an applicable positive fare and confirmed endpoint capability are also available.
+- Real regional time rows remain local business data; committed templates and tests use synthetic records only.
+
+## D-040: Approved W5 Rates And Customer-Owned-Terminal Exemptions Enter Costing
+
+Date: 2026-07-27
+
+Decision:
+
+The current W5 batch classified as eligible for admission is approved to enter formal route costing. Positive records require a standard node ID and retain package type, commodity scope, trade type, fee unit, source, and maintenance trace. Other positive records without a standard node binding are ignored for this batch.
+
+The two reviewed zero `入库` rows are confirmed to mean that the delivery node is a customer-owned terminal and no separate terminal operation fee applies. They enter the formal W5 table as `applicability=not_applicable`, with unit price 0 and a required source-backed exemption reason. They are not ordinary zero-priced rates and are not missing values defaulted to zero.
+
+Provider results distinguish:
+
+- `resolved`: a positive applicable rate creates a `south_port_operation_fee` cost component;
+- `not_applicable`: an approved exemption allows the route with an explicit 0 amount and reason, but creates no artificial zero-valued cost component;
+- `manual_review`: missing, conflicting, duplicated, or dimension-mismatched data still blocks the candidate when formal W5 is active.
+
+Reason:
+
+The user explicitly approved the eligible positive rows and clarified the business meaning of the two zero rows. A separate non-applicability state preserves the global rule that missing cost is never silently zero while allowing confirmed customer-owned-terminal behavior to participate in measurement.
+
+Implications:
+
+- The local formal `南港码头作业费.csv` may contain both `chargeable` and `not_applicable` rows.
+- A `not_applicable` row must have unit price 0 and a non-empty reason; a `chargeable` row must remain positive.
+- If one request matches both a positive rate and an exemption, the Provider returns `manual_review`.
+- Explicit W5 application refuses to overwrite an existing formal table.
+- Real W5 rows remain local business data and are ignored by Git.

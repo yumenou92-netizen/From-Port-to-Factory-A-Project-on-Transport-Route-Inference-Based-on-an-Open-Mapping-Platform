@@ -61,6 +61,10 @@ def test_write_audit_outputs_creates_markdown_json_and_csv(tmp_path):
         tmp_path / "output" / "data_foundation_operation_fee_region_assignments.csv"
     ).exists()
     assert (tmp_path / "output" / "data_foundation_port_operation_fees.csv").exists()
+    assert (
+        tmp_path / "output" / "data_foundation_port_operation_fee_exemptions.csv"
+    ).exists()
+    assert (tmp_path / "output" / "data_foundation_inland_waterway_times.csv").exists()
 
 
 def test_data_foundation_audit_reports_w3_w5_reference_tables(tmp_path):
@@ -94,8 +98,58 @@ def test_data_foundation_audit_reports_w3_w5_reference_tables(tmp_path):
     )
     write_csv(
         data_dir / "南港码头作业费.csv",
-        ["港口名称", "包装方式", "费用类型", "单价", "费用单位", "数据来源"],
-        [["南港A", "散粮", "码头作业费", "8", "元/吨", "test"]],
+        [
+            "港口名称",
+            "包装方式",
+            "费用类型",
+            "单价",
+            "费用单位",
+            "适用状态",
+            "不适用原因",
+            "数据来源",
+        ],
+        [
+            ["南港A", "散粮", "码头作业费", "8", "元/吨", "chargeable", "", "test"],
+            [
+                "客户A",
+                "散粮",
+                "码头作业费",
+                "0",
+                "元/吨",
+                "not_applicable",
+                "客户自有码头",
+                "test",
+            ],
+        ],
+    )
+    write_csv(
+        data_dir / "内河驳船运输时效.csv",
+        [
+            "origin_region_code",
+            "destination_region_code",
+            "duration_value",
+            "duration_unit",
+            "time_scope",
+            "bidirectional",
+            "source_type",
+            "source",
+            "rule_id",
+            "rule_version",
+            "maintained_at",
+        ],
+        [[
+            "pearl_river_delta",
+            "guigang",
+            "5",
+            "天",
+            "complete_segment",
+            "是",
+            "real_data",
+            "test",
+            "barge_region_total_time",
+            "1.0",
+            "2026-07-27",
+        ]],
     )
 
     audit = build_data_foundation_audit(
@@ -106,6 +160,10 @@ def test_data_foundation_audit_reports_w3_w5_reference_tables(tmp_path):
     assert audit.port_capability_count == 1
     assert audit.region_mapping_count == 1
     assert audit.port_operation_fee_rate_count == 1
+    assert audit.port_operation_fee_exemption_count == 1
+    assert audit.name_only_port_operation_fee_exemption_count == 0
+    assert audit.inland_waterway_time_record_count == 1
+    assert audit.inland_waterway_time_rows[0]["duration_hours"] == "120"
     assert audit.unresolved_port_capability_node_count == 0
     assert audit.unresolved_port_operation_fee_node_count == 0
     assert audit.reference_warnings == []

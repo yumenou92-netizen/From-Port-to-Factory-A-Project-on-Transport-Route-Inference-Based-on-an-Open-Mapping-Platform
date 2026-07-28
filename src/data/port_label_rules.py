@@ -23,6 +23,11 @@ PORT_LABEL_RULE_FILE_NAME = "部分码头标签.json"
 PORT_LABEL_SOURCE_FEE_TYPE = "入库"
 PORT_LABEL_PACKAGE_TYPE = "散粮"
 PORT_NAME_SUFFIXES = ("作业区", "港区", "码头", "港")
+W5_ADMISSION_ELIGIBLE = "可申请准入"
+W5_ADMISSION_PENDING_NODE = "节点待确认"
+W5_ADMISSION_PENDING_FEE_MEANING = "费用含义待确认"
+W5_FORMAL_APPLICABILITY_CHARGEABLE = "chargeable"
+W5_FORMAL_APPLICABILITY_NOT_APPLICABLE = "not_applicable"
 
 
 class PortLabelRuleError(ValueError):
@@ -202,6 +207,161 @@ def make_audit_row(
         "conversion_status": conversion_status,
         "issue": issue,
     }
+
+
+def build_w5_admission_review_rows(
+    audit_rows: Iterable[dict[str, str]],
+) -> tuple[dict[str, str], ...]:
+    """Create a human-review gate without writing the formal W5 source table."""
+
+    review_rows: list[dict[str, str]] = []
+    for row in audit_rows:
+        unit_price = str(row.get("unit_price") or "").strip()
+        conversion_status = str(row.get("conversion_status") or "").strip()
+        node_id = str(row.get("node_id") or "").strip()
+        if conversion_status != "converted":
+            suggested_status = W5_ADMISSION_PENDING_FEE_MEANING
+            question = str(row.get("issue") or "").strip() or "费率含义或格式需要人工确认。"
+        elif not node_id:
+            suggested_status = W5_ADMISSION_PENDING_NODE
+            question = "尚未绑定唯一标准 node_id；确认、忽略或补录节点后再决定是否准入。"
+        else:
+            suggested_status = W5_ADMISSION_ELIGIBLE
+            question = "请确认节点绑定、适用条件和费率后，方可手工写入正式 W5 表。"
+
+        review_rows.append(
+            {
+                "港口原名": str(row.get("port_name") or ""),
+                "标准港口名称": str(row.get("canonical_name") or ""),
+                "node_id": node_id,
+                "包装方式": str(row.get("package_type") or ""),
+                "trade_type": str(row.get("trade_type") or ""),
+                "品种范围": str(row.get("commodity_scope") or ""),
+                "入库费率": unit_price,
+                "费用单位": str(row.get("fee_unit") or ""),
+                "节点匹配方式": str(row.get("registry_match_status") or ""),
+                "数据来源": str(row.get("source") or ""),
+                "建议处理状态": suggested_status,
+                "待确认问题": question,
+                "人工确认结果": "",
+            }
+        )
+    return tuple(review_rows)
+
+
+def render_w5_admission_review_markdown(
+    review_rows: Iterable[dict[str, str]],
+) -> str:
+    rows = tuple(review_rows)
+    counts = {
+        status: sum(1 for row in rows if row["建议处理状态"] == status)
+        for status in (
+            W5_ADMISSION_ELIGIBLE,
+            W5_ADMISSION_PENDING_NODE,
+            W5_ADMISSION_PENDING_FEE_MEANING,
+        )
+    }
+    lines = [
+        "# W5 正式数据准入人工复核清单",
+        "",
+        "本清单只用于人工审核，不会自动写入 `南港码头作业费.csv`。",
+        "",
+        "## 分组统计",
+        "",
+        f"- 可申请准入：{counts[W5_ADMISSION_ELIGIBLE]} 条",
+        f"- 节点待确认：{counts[W5_ADMISSION_PENDING_NODE]} 条",
+        f"- 费用含义待确认：{counts[W5_ADMISSION_PENDING_FEE_MEANING]} 条",
+        "",
+        "## 审核要求",
+        "",
+        "- 可申请准入不等于已经批准；必须填写人工确认结果。",
+        "- 节点待确认项不得按名称猜测或自动注册。",
+        "- 零值、无效值或费用含义不明项不得解释为免费。",
+        "- 只有节点、包装、品种、贸易类型、单位、费率和来源均确认后，才可手工写入正式 W5 表。",
+        "",
+    ]
+    for status in (
+        W5_ADMISSION_ELIGIBLE,
+        W5_ADMISSION_PENDING_NODE,
+        W5_ADMISSION_PENDING_FEE_MEANING,
+    ):
+        lines.extend((f"## {status}", ""))
+        matching = [row for row in rows if row["建议处理状态"] == status]
+        if not matching:
+            lines.extend(("- 无", ""))
+            continue
+        for row in matching:
+            label = row["标准港口名称"] or row["港口原名"]
+            lines.extend(
+                (
+                    f"- {label}；node_id={row['node_id'] or '未确认'}；"
+                    f"{row['trade_type']}；{row['包装方式']}；"
+                    f"{row['入库费率']}{row['费用单位']}；"
+                    f"品种={row['品种范围'] or '未提供'}",
+                    f"  - 待确认：{row['待确认问题']}",
+                )
+            )
+        lines.append("")
+    return "\n".join(lines)
+
+
+def build_w5_formal_rows(
+    audit_rows: Iterable[dict[str, str]],
+    *,
+    approve_zero_as_customer_owned_exemption: bool,
+    confirmation_source: str,
+    maintained_at: str,
+) -> tuple[dict[str, str], ...]:
+    """Promote only approved positive rows and explicit customer-owned zero exemptions.
+
+    Positive rows require a standard node ID. Every other unbound positive row
+    is ignored. Zero rows are admitted only when the caller explicitly confirms
+    the customer-owned-terminal exemption policy.
+    """
+
+    formal_rows: list[dict[str, str]] = []
+    for row in audit_rows:
+        conversion_status = str(row.get("conversion_status") or "").strip()
+        node_id = str(row.get("node_id") or "").strip()
+        raw_price = str(row.get("unit_price") or "").strip()
+        is_zero = False
+        try:
+            is_zero = Decimal(raw_price) == 0
+        except (InvalidOperation, ValueError):
+            pass
+
+        if conversion_status == "converted" and node_id:
+            applicability = W5_FORMAL_APPLICABILITY_CHARGEABLE
+            exemption_reason = ""
+        elif is_zero and approve_zero_as_customer_owned_exemption:
+            applicability = W5_FORMAL_APPLICABILITY_NOT_APPLICABLE
+            exemption_reason = "客户自有码头，经业务确认无需码头作业费"
+        else:
+            continue
+
+        canonical_name = str(row.get("canonical_name") or "").strip()
+        raw_name = str(row.get("port_name") or "").strip()
+        formal_rows.append(
+            {
+                "标准节点ID": node_id,
+                "南港名称": canonical_name or raw_name,
+                "包装方式": str(row.get("package_type") or ""),
+                "贸易类型": str(row.get("trade_type") or ""),
+                "费用类型": str(row.get("fee_type") or ""),
+                "单价": "0" if applicability == W5_FORMAL_APPLICABILITY_NOT_APPLICABLE else raw_price,
+                "费用单位": str(row.get("fee_unit") or ""),
+                "适用状态": applicability,
+                "不适用原因": exemption_reason,
+                "来源类型": "real_data",
+                "适用品种": str(row.get("commodity_scope") or ""),
+                "别名": raw_name if canonical_name and raw_name != canonical_name else "",
+                "维护日期": maintained_at,
+                "作业费区域编码": "",
+                "是否地域代理参考码头": "否",
+                "数据来源": f"{row.get('source') or ''}；{confirmation_source}",
+            }
+        )
+    return tuple(formal_rows)
 
 
 def match_port_label_name(

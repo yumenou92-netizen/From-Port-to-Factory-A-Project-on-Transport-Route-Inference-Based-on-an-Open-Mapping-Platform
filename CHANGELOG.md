@@ -2,6 +2,26 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-07-27
+
+### Changed
+
+- Unified the current shipping-time business scope: maintained “航行时效” now represents the complete corresponding shipping segment for both north-to-south bulk shipping and inland-waterway barge transport; the model does not decompose waiting, loading, physical sailing, or unloading.
+- Changed bulk-shipping and barge edges to require `time_scope=complete_segment`; missing segment time remains unavailable and is never defaulted to zero.
+- Added a source-backed `内河驳船运输时效.csv` interface with day/hour conversion, bidirectional regional matching, explicit source/rule trace, and duplicate or missing-rule manual review.
+- Added the inland-waterway time table to the read-only data-foundation audit, including file status, record count, normalized hour output, and the warning that time alone cannot authorize a graph edge without applicable freight and endpoint capability.
+- Added W5 formal-data admission review output that separates rows eligible for manual admission review from unresolved-node rows and fee-meaning review rows; the audit still never writes the formal W5 source table automatically.
+- Added explicit W5 application after user approval: 69 bound positive rules enter the local formal table as `chargeable`, two confirmed customer-owned-terminal rules enter as `not_applicable`, and other unbound positive rows are ignored.
+- Extended the operation-fee Provider with a source-backed `not_applicable` result. It carries an explicit 0 amount and exemption reason, creates no artificial zero-valued cost component, and remains distinct from missing-data `manual_review`.
+- Extended `leader_full_flow` and data-foundation audit output to distinguish charged operation fees, approved non-applicability, and missing or unsafe fee data.
+
+### Verification
+
+- Affected inland-waterway time, barge capability, bulk-shipping, transport-edge, data-foundation audit, template, full-flow, and W5 admission tests passed: `57 passed in 0.73s`.
+- Required developer smoke passed after the final W5 admission changes: `350 passed in 1.70s`; real-data smoke passed with 312 graph-ready edges and zero missing node IDs. The Tencent probe completed safely with network failures represented as `manual_review`, not as successful live API evidence.
+- Read-only local audits loaded 7 regional inland-waterway time rules and generated W5 admission review groups of 69 eligible-for-review, 7 pending-node, and 2 pending-fee-meaning rows. No Tencent call or formal-table write was performed.
+- After explicit approval, the local formal W5 table loaded 69 chargeable rates and 2 non-applicability rules; the final affected W5, full-flow, audit, and template suite passed `41 passed in 0.78s`.
+
 ## 2026-07-24
 
 ### Changed

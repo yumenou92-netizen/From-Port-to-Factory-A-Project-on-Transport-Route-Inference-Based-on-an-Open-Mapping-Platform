@@ -12,12 +12,16 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 from xml.etree import ElementTree
 
+from src.data.inland_waterway_time import (
+    find_optional_inland_waterway_time_file,
+    load_inland_waterway_time_records,
+)
 from src.data.loaders import RealDataBundle, data_dir_from_env, load_real_data_bundle
 from src.data.port_reference import load_port_reference_tables
 from src.domain.route_request import RouteRequest
 from src.routing.port_operation_fee_provider import (
     find_optional_port_operation_fee_file,
-    load_port_operation_fee_rates,
+    load_port_operation_fee_table,
 )
 
 
@@ -83,17 +87,23 @@ class FoundationAudit:
     port_capability_file: str | None
     region_mapping_file: str | None
     port_operation_fee_file: str | None
+    inland_waterway_time_file: str | None
     port_capability_count: int
     region_mapping_count: int
     operation_fee_region_assignment_count: int
     confirmed_operation_fee_region_assignment_count: int
     port_operation_fee_rate_count: int
+    port_operation_fee_exemption_count: int
+    name_only_port_operation_fee_exemption_count: int
+    inland_waterway_time_record_count: int
     unresolved_port_capability_node_count: int
     unresolved_port_operation_fee_node_count: int
     port_capability_rows: list[dict[str, Any]]
     region_mapping_rows: list[dict[str, Any]]
     operation_fee_region_assignment_rows: list[dict[str, Any]]
     port_operation_fee_rows: list[dict[str, Any]]
+    port_operation_fee_exemption_rows: list[dict[str, Any]]
+    inland_waterway_time_rows: list[dict[str, Any]]
     reference_warnings: list[str]
     unresolved_freight_locations: list[str]
     unresolved_additional_fee_nodes: list[str]
@@ -140,14 +150,24 @@ def build_data_foundation_audit(
 
     port_reference = load_port_reference_tables(bundle.data_dir, registry=registry)
     operation_fee_file = find_optional_port_operation_fee_file(bundle.data_dir)
-    operation_fee_rates = (
-        load_port_operation_fee_rates(operation_fee_file, registry=registry)
+    operation_fee_rates, operation_fee_exemptions = (
+        load_port_operation_fee_table(operation_fee_file, registry=registry)
         if operation_fee_file is not None
-        else []
+        else ([], [])
+    )
+    inland_waterway_time_file = find_optional_inland_waterway_time_file(bundle.data_dir)
+    inland_waterway_time_records = (
+        load_inland_waterway_time_records(inland_waterway_time_file)
+        if inland_waterway_time_file is not None
+        else ()
     )
     reference_warnings = list(port_reference.warnings)
     if operation_fee_file is None:
         reference_warnings.append("南港码头作业费.csv 未接入；缺失作业费不计入，也不解释为 0。")
+    if inland_waterway_time_file is None:
+        reference_warnings.append(
+            "内河驳船运输时效.csv 未接入；缺失航运总时间不补零，也不生成可搜索驳船边。"
+        )
     pending_operation_fee_assignments = [
         item
         for item in port_reference.operation_fee_region_assignments
@@ -191,6 +211,11 @@ def build_data_foundation_audit(
             else None
         ),
         port_operation_fee_file=str(operation_fee_file) if operation_fee_file is not None else None,
+        inland_waterway_time_file=(
+            str(inland_waterway_time_file)
+            if inland_waterway_time_file is not None
+            else None
+        ),
         port_capability_count=len(port_reference.port_capabilities),
         region_mapping_count=len(port_reference.region_mappings),
         operation_fee_region_assignment_count=len(
@@ -201,6 +226,11 @@ def build_data_foundation_audit(
             for item in port_reference.operation_fee_region_assignments
         ),
         port_operation_fee_rate_count=len(operation_fee_rates),
+        port_operation_fee_exemption_count=len(operation_fee_exemptions),
+        name_only_port_operation_fee_exemption_count=sum(
+            exemption.node_id is None for exemption in operation_fee_exemptions
+        ),
+        inland_waterway_time_record_count=len(inland_waterway_time_records),
         unresolved_port_capability_node_count=len(unresolved_port_capability_nodes),
         unresolved_port_operation_fee_node_count=len(unresolved_port_operation_fee_nodes),
         port_capability_rows=[
@@ -215,6 +245,14 @@ def build_data_foundation_audit(
         ],
         port_operation_fee_rows=[
             port_operation_fee_to_row(record) for record in operation_fee_rates
+        ],
+        port_operation_fee_exemption_rows=[
+            port_operation_fee_exemption_to_row(record)
+            for record in operation_fee_exemptions
+        ],
+        inland_waterway_time_rows=[
+            inland_waterway_time_to_row(record)
+            for record in inland_waterway_time_records
         ],
         reference_warnings=reference_warnings,
         unresolved_freight_locations=unresolved_freight_locations,
@@ -401,6 +439,40 @@ def port_operation_fee_to_row(record: Any) -> dict[str, Any]:
     }
 
 
+def port_operation_fee_exemption_to_row(record: Any) -> dict[str, Any]:
+    return {
+        "node_id": record.node_id or "",
+        "port_name": record.port_name,
+        "package_type": record.package_type,
+        "trade_type": record.trade_type,
+        "fee_type": record.fee_type,
+        "applicability": "not_applicable",
+        "unit_price": "0",
+        "reason": record.reason,
+        "source": record.source,
+        "commodity_scope": "；".join(record.commodity_scope),
+        "aliases": "；".join(record.aliases),
+        "maintained_at": record.maintained_at or "",
+    }
+
+
+def inland_waterway_time_to_row(record: Any) -> dict[str, Any]:
+    return {
+        "origin_region_code": record.origin_region_code,
+        "destination_region_code": record.destination_region_code,
+        "duration_value": str(record.duration_value),
+        "duration_unit": record.duration_unit,
+        "duration_hours": str(record.duration_hours),
+        "time_scope": record.time_scope,
+        "bidirectional": record.bidirectional,
+        "source_type": record.source_type,
+        "source": record.source,
+        "rule_id": record.rule_id,
+        "rule_version": record.rule_version,
+        "maintained_at": record.maintained_at or "",
+    }
+
+
 def read_xlsx_first_sheet(path: Path) -> list[list[str]]:
     with zipfile.ZipFile(path) as archive:
         shared_strings = read_shared_strings(archive)
@@ -521,6 +593,14 @@ def write_audit_outputs(audit: FoundationAudit, output_dir: Path) -> tuple[Path,
     )
     write_csv(output_dir / "data_foundation_port_operation_fees.csv", audit.port_operation_fee_rows)
     write_csv(
+        output_dir / "data_foundation_port_operation_fee_exemptions.csv",
+        audit.port_operation_fee_exemption_rows,
+    )
+    write_csv(
+        output_dir / "data_foundation_inland_waterway_times.csv",
+        audit.inland_waterway_time_rows,
+    )
+    write_csv(
         output_dir / "data_foundation_unresolved_locations.csv",
         [{"name": name, "scope": "freight_rate"} for name in audit.unresolved_freight_locations]
         + [{"name": name, "scope": "additional_fee"} for name in audit.unresolved_additional_fee_nodes]
@@ -578,6 +658,9 @@ def render_markdown(audit: FoundationAudit) -> str:
             f"（已确认 {audit.confirmed_operation_fee_region_assignment_count}）"
         ),
         f"- 南港码头作业费记录：{audit.port_operation_fee_rate_count}",
+        f"- 南港码头作业费明确不适用规则：{audit.port_operation_fee_exemption_count}",
+        f"- 其中按名称匹配的不适用规则：{audit.name_only_port_operation_fee_exemption_count}",
+        f"- 内河驳船运输时效记录：{audit.inland_waterway_time_record_count}",
         "",
         "## 2. 订单口径覆盖",
         "",
@@ -620,6 +703,18 @@ def render_markdown(audit: FoundationAudit) -> str:
                 f"已确认={audit.confirmed_operation_fee_region_assignment_count}"
             ),
             f"- 南港码头作业费表：{audit.port_operation_fee_file or '未接入'}；记录数={audit.port_operation_fee_rate_count}",
+            f"- 作业费明确不适用规则：{audit.port_operation_fee_exemption_count}",
+            (
+                "- 其中按名称匹配的不适用规则："
+                f"{audit.name_only_port_operation_fee_exemption_count}"
+                "（已获业务明确批准，不计入未绑定正数费率缺口）"
+            ),
+            (
+                "- 内河驳船运输时效表："
+                f"{audit.inland_waterway_time_file or '未接入'}；"
+                f"记录数={audit.inland_waterway_time_record_count}；"
+                "当前模型将航行时效直接视为完整航运段总时间"
+            ),
             f"- 港口能力表未绑定节点数：{audit.unresolved_port_capability_node_count}",
             f"- 南港码头作业费未绑定节点数：{audit.unresolved_port_operation_fee_node_count}",
         ]
@@ -652,9 +747,17 @@ def render_markdown(audit: FoundationAudit) -> str:
             "- 散船运价表中 `project_scope_needs_confirmation` 和 `needs_review` 的目的标签需要先人工确认后再进入主链。",
             "- W3 表缺失时只输出接口提示，不猜测港口能力或区域映射；能力缺失不生成对应运输边。",
             (
+                "- 驳船时效表只提供完整航运段总时间，不拆分等待、装卸和实际航行；"
+                "只有时效而没有适用航费时仍不生成可搜索驳船边。"
+            ),
+            (
                 "- W5 优先使用码头精确费率；仅当标准 node_id 存在唯一已确认 "
                 "operation_fee_region_code 映射和唯一参考码头费率时使用 regional_proxy；"
                 "其余情况不计入，也不解释为 0。"
+            ),
+            (
+                "- 经业务确认的客户自有码头规则使用 not_applicable 和明确原因，"
+                "允许以 0 元通过但不生成费用分项；它与缺失数据不同。"
             ),
         ]
     )
@@ -688,6 +791,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"（已确认 {audit.confirmed_operation_fee_region_assignment_count}）"
     )
     print(f"南港码头作业费记录：{audit.port_operation_fee_rate_count}")
+    print(f"作业费明确不适用规则：{audit.port_operation_fee_exemption_count}")
+    print(f"其中按名称匹配：{audit.name_only_port_operation_fee_exemption_count}")
+    print(f"内河驳船运输时效记录：{audit.inland_waterway_time_record_count}")
     return 0
 
 

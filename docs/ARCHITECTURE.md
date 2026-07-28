@@ -200,7 +200,7 @@ Current enabled rule groups:
 - unknown container truck yuan-per-box calculation when `distance_km` and `distance_source` are supplied.
 - real bulk-shipping workbook rate calculation for in-scope south-port destination labels;
 - W5 south-port operation-fee Provider contract for one aggregate `码头作业费` component, matched by south port, package type, trade type, commodity scope, and exact fee unit (`元/吨` for bulk-grain ton orders; `元/箱` reserved for containerized orders).
-- W5 operation-fee priority is exact standard-node rate, then one confirmed `operation_fee_region_code` reference rate, then manual review. Regional results use `regional_proxy` and preserve reference-port and mapping-rule trace.
+- W5 operation-fee priority is an applicable exact standard-node rule, then one confirmed `operation_fee_region_code` reference rate, then manual review. Exact rules may be positive `chargeable` rates or source-backed `not_applicable` rules for confirmed customer-owned terminals. Regional results use `regional_proxy` and preserve reference-port and mapping-rule trace.
 
 Current disabled rule groups:
 
@@ -231,14 +231,15 @@ Current state:
 - truck-route adapter exists as an optional future enhancement, not the current dependency;
 - unknown bulk and container truck costs consume confirmed road distance from the geo layer, and currently accept Tencent normal driving distance as the prototype distance source;
 - `build_transport_edge()` combines resolved shipping time with freight-rate and cost results;
-- the real-data `EdgeCandidate` bridge accepts explicit manual time for legacy integration validation; the current `leader_full_flow` bulk-shipping trunk uses real workbook rates and confirmed pure-sailing regional time;
+- the real-data `EdgeCandidate` bridge accepts explicit manual time for legacy integration validation; the current `leader_full_flow` bulk-shipping trunk uses real workbook rates and confirmed complete-segment regional shipping time;
 - Tencent Maps must not be called directly from cost rules.
 - `routing/inland_waterway_provider.py` defines the next data interfaces for port capabilities, regional mappings, and inland-waterway barge fee/time records; its first Provider is demo-only and generates explicit `demo_placeholder` barge edges only for same-region Fujian/Minjiang or Pearl Delta bulk-grain scenarios.
 - `data/port_reference.py` is the CSV-backed W3 loader for port capabilities and regional mappings and the W5 loader for explicit node-to-operation-fee-region assignments; missing or unconfirmed inputs are audited rather than inferred.
-- `routing/port_operation_fee_provider.py` is the W5 cost interface for south-port operation fees. It uses exact rate -> confirmed region proxy -> manual review, and missing, duplicated, trade-type-mismatched, commodity-mismatched, unit-mismatched, or order-mismatched records are not interpreted as zero.
+- `routing/port_operation_fee_provider.py` is the W5 cost interface for south-port operation fees. It distinguishes positive `resolved`, source-backed customer-owned-terminal `not_applicable`, and unsafe or missing `manual_review` results. A `not_applicable` result permits the route with an explicit 0 and reason but creates no artificial zero-valued cost component; missing, duplicated, conflicting, trade-type-mismatched, commodity-mismatched, unit-mismatched, or order-mismatched records are not interpreted as zero.
 - `data/port_label_rules.py` reads `部分码头标签.json` as a candidate rule source: `serviceFees.入库` may become a candidate operation-fee rate, but only formal CSV records can enter normal route costing.
-- `leader_full_flow.py` may optionally load the W5 operation-fee Provider; if the fee table is absent, the demo explicitly reports that operation fees are not counted, and if the table is present, candidates with missing or unsafe operation-fee data are excluded instead of being treated as zero-cost.
-- Inland-waterway barge Provider output uses `transport_stage=barge_last_mile` and `time_scope=pure_sailing`; formal barge data must replace the demo records before these edges are treated as real business data.
+- `leader_full_flow.py` may optionally load the W5 operation-fee Provider; if the fee table is absent, the demo explicitly reports that operation fees are not counted. If the table is present, positive fees are included, confirmed `not_applicable` candidates remain searchable with their reason, and candidates with missing or unsafe data are excluded instead of being treated as zero-cost.
+- Bulk-shipping and inland-waterway barge Provider outputs use `time_scope=complete_segment`: the maintained business “航行时效” is the whole shipping-segment time in this simplified model and is not decomposed into waiting, loading, physical sailing, or unloading.
+- Inland-waterway regional time is loaded independently from freight. A resolved time record alone cannot create a searchable barge edge; formal positive freight, compatible endpoint capabilities, packaging/commodity support, and traceable mappings are all still required.
 
 ### Customer Rule Layer
 

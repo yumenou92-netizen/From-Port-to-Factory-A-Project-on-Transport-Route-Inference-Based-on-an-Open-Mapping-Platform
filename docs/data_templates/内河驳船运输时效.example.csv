@@ -1,0 +1,2 @@
+origin_region_code,destination_region_code,duration_value,duration_unit,time_scope,bidirectional,source_type,source,rule_id,rule_version,maintained_at
+example_region_a,example_region_b,2,天,complete_segment,是,real_data,demo_template,example_complete_barge_time,1.0,2026-07-27

@@ -8,7 +8,7 @@ from src.domain.cost_rules import CostCalculationResult
 from src.domain.freight_rate import create_freight_rate
 from src.domain.route_request import RouteRequest
 from src.routing.shipping_time_provider import ShippingTimeResult
-from src.routing.transport_contracts import CostComponent
+from src.routing.transport_contracts import CostComponent, TimeScope
 from src.routing.transport_edge import TransportEdge, build_transport_edge
 
 
@@ -21,6 +21,151 @@ SUPPORTED_DEMO_INLAND_REGIONS = {"fujian_minjiang", "pearl_river_delta"}
 
 class InlandWaterwayProviderError(ValueError):
     """Raised when inland-waterway interface records are internally inconsistent."""
+
+
+@dataclass(frozen=True)
+class InlandWaterwayTimeRecord:
+    """One source-backed regional barge time rule independent of barge freight.
+
+    Time and freight deliberately remain separate: a resolved time record does
+    not authorize a searchable barge edge while the applicable freight is
+    missing.
+    """
+
+    origin_region_code: str
+    destination_region_code: str
+    duration_value: Decimal
+    duration_unit: str
+    time_scope: TimeScope
+    bidirectional: bool
+    source_type: Literal["real_data", "demo_placeholder"]
+    source: str
+    rule_id: str
+    rule_version: str
+    maintained_at: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "origin_region_code",
+            _required_text(self.origin_region_code, "驳船时效起点区域编码"),
+        )
+        object.__setattr__(
+            self,
+            "destination_region_code",
+            _required_text(self.destination_region_code, "驳船时效终点区域编码"),
+        )
+        object.__setattr__(
+            self,
+            "duration_value",
+            _positive_decimal(self.duration_value, "驳船运输时效"),
+        )
+        object.__setattr__(self, "duration_unit", _required_text(self.duration_unit, "驳船时效单位"))
+        _ = self.duration_hours
+        if self.time_scope != "complete_segment":
+            raise InlandWaterwayProviderError(
+                f"驳船运输时效在当前简化模型中必须是 complete_segment：{self.time_scope}"
+            )
+        if not isinstance(self.bidirectional, bool):
+            raise InlandWaterwayProviderError("驳船时效双向标记必须是布尔值。")
+        if self.source_type not in {"real_data", "demo_placeholder"}:
+            raise InlandWaterwayProviderError(
+                f"不支持的驳船时效来源类型：{self.source_type}"
+            )
+        object.__setattr__(self, "source", _required_text(self.source, "驳船时效来源"))
+        object.__setattr__(self, "rule_id", _required_text(self.rule_id, "驳船时效规则编号"))
+        object.__setattr__(
+            self,
+            "rule_version",
+            _required_text(self.rule_version, "驳船时效规则版本"),
+        )
+        object.__setattr__(self, "maintained_at", _optional_text(self.maintained_at))
+
+    @property
+    def duration_hours(self) -> Decimal:
+        unit = self.duration_unit.strip().lower()
+        if unit in {"小时", "时", "hour", "hours", "h"}:
+            return self.duration_value
+        if unit in {"天", "日", "day", "days", "d"}:
+            return self.duration_value * Decimal("24")
+        raise InlandWaterwayProviderError(f"不支持的驳船时效单位：{self.duration_unit}")
+
+    def matches(self, origin_region_code: str, destination_region_code: str) -> bool:
+        origin = _required_text(origin_region_code, "请求起点区域编码")
+        destination = _required_text(destination_region_code, "请求终点区域编码")
+        if (
+            origin == self.origin_region_code
+            and destination == self.destination_region_code
+        ):
+            return True
+        return (
+            self.bidirectional
+            and origin == self.destination_region_code
+            and destination == self.origin_region_code
+        )
+
+
+class TableInlandWaterwayTimeProvider:
+    """Resolve regional barge time without fabricating a corresponding fare."""
+
+    def __init__(self, records: Sequence[InlandWaterwayTimeRecord]) -> None:
+        self.records = tuple(records)
+
+    def get_time(
+        self,
+        *,
+        origin_region_code: str,
+        destination_region_code: str,
+        origin_name: str,
+        destination_name: str,
+    ) -> ShippingTimeResult:
+        matches = [
+            record
+            for record in self.records
+            if record.matches(origin_region_code, destination_region_code)
+        ]
+        stage = f"{_required_text(origin_name, '驳船起点名称')}至{_required_text(destination_name, '驳船终点名称')}"
+        if not matches:
+            return ShippingTimeResult(
+                status="manual_review",
+                duration_hours=None,
+                source="inland_waterway_time_table",
+                message=(
+                    f"没有匹配 {origin_region_code} 至 {destination_region_code} "
+                    "的驳船运输时效规则。"
+                ),
+                stage=stage,
+                transport_mode="驳船",
+                time_scope=None,
+            )
+        if len(matches) > 1:
+            sources = "；".join(record.source for record in matches)
+            return ShippingTimeResult(
+                status="manual_review",
+                duration_hours=None,
+                source="inland_waterway_time_table",
+                message=f"匹配到多条驳船运输时效规则，请人工去重：{sources}",
+                stage=stage,
+                transport_mode="驳船",
+                time_scope=None,
+            )
+
+        record = matches[0]
+        source = _source_ref(record.source_type, record.source)
+        return ShippingTimeResult(
+            status="resolved",
+            duration_hours=record.duration_hours,
+            source=source,
+            message=(
+                "采用区域映射驳船航运总时间，模型不拆分等待、装卸和航行组成；"
+                "该结果只解决时效，不代表驳船航费已经具备。"
+            ),
+            stage=stage,
+            transport_mode="驳船",
+            input_value=str(record.duration_value),
+            input_unit=record.duration_unit,
+            time_scope=record.time_scope,
+        )
 
 
 @dataclass(frozen=True)
@@ -338,14 +483,14 @@ class DemoInlandWaterwayBargeProvider:
             duration_hours=rate_time.duration_hours,
             source=price_source,
             message=(
-                "已生成明确标记的 demo_placeholder 内河驳船纯航行时间；"
-                "不含等待、装卸、港口作业、堆存和短倒时间。"
+                "已生成明确标记的 demo_placeholder 内河驳船航运总时间；"
+                "当前简化模型不拆分等待、装卸和航行组成。"
             ),
             stage=f"{origin_name}至{destination_name}",
             transport_mode="驳船",
             input_value=str(rate_time.duration_hours),
             input_unit="小时",
-            time_scope="pure_sailing",
+            time_scope="complete_segment",
         )
         cost_component = CostComponent(
             component_type="barge_freight",
@@ -493,8 +638,21 @@ DEFAULT_REGION_MAPPING_RECORDS = (
     RegionMappingRecord(
         region_code="pearl_river_delta",
         region_name="珠三角内河",
-        city_keywords=("广州", "深圳", "东莞"),
-        port_keywords=("广州新港", "黄埔", "深圳蛇口", "蛇口", "东莞新沙", "新沙", "麻涌"),
+        city_keywords=("广州", "深圳", "东莞", "佛山", "肇庆", "江门", "中山", "珠海"),
+        port_keywords=(
+            "广州新港",
+            "黄埔",
+            "深圳蛇口",
+            "蛇口",
+            "东莞新沙",
+            "新沙",
+            "麻涌",
+            "佛山",
+            "肇庆",
+            "江门",
+            "中山",
+            "珠海",
+        ),
         bulk_rate_destination_group="珠三角",
         bulk_time_region="珠三角",
         source="demo_placeholder:region_mapping:pearl_river_delta",
@@ -522,7 +680,20 @@ DEFAULT_PORT_CAPABILITY_RECORDS = (
         supported_package_types=("散粮",),
         supported_commodities=("*",),
         source="demo_placeholder:port_capability:pearl_river_delta",
-        aliases=("广州", "深圳", "东莞", "黄埔", "蛇口", "新沙", "麻涌"),
+        aliases=(
+            "广州",
+            "深圳",
+            "东莞",
+            "佛山",
+            "肇庆",
+            "江门",
+            "中山",
+            "珠海",
+            "黄埔",
+            "蛇口",
+            "新沙",
+            "麻涌",
+        ),
         infrastructure_type="sea_river_integrated_port_or_customer_terminal",
         can_receive_bulk_shipping=True,
     ),

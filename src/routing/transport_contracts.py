@@ -27,8 +27,8 @@ ALLOWED_TRANSPORT_STAGES = {
 }
 ALLOWED_TIME_SCOPES = {"pure_sailing", "complete_segment", "road_driving"}
 ALLOWED_TIME_SCOPES_BY_STAGE = {
-    "bulk_shipping_trunk": {"pure_sailing"},
-    "barge_last_mile": {"pure_sailing", "complete_segment"},
+    "bulk_shipping_trunk": {"complete_segment"},
+    "barge_last_mile": {"complete_segment"},
     "road_last_mile": {"road_driving", "complete_segment"},
     "rail_trunk": {"complete_segment"},
 }

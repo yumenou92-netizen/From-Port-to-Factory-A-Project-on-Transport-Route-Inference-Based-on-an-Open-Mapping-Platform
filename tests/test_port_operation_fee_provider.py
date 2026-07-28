@@ -2,13 +2,18 @@ from decimal import Decimal
 
 import pytest
 
+from src.data.loaders import NodeRecord
+from src.domain.node_registry import build_node_registry
 from src.domain.route_request import RouteRequest
+from src.routing.port_region_resolver import RuleBasedPortRegionResolver
 from src.routing.port_operation_fee_provider import (
     DemoPortOperationFeeProvider,
     PortOperationFeeError,
+    PortOperationFeeExemption,
     PortOperationFeeRate,
     PortOperationFeeRegionAssignment,
     TablePortOperationFeeProvider,
+    load_port_operation_fee_exemptions,
     load_port_operation_fee_rates,
 )
 
@@ -54,6 +59,66 @@ def test_missing_operation_fee_rate_requires_manual_review_not_zero():
     assert quote.total_cost_yuan is None
     assert quote.component is None
     assert "不解释为 0" in quote.message
+
+
+def test_customer_owned_terminal_exemption_is_explicit_zero_not_missing_default():
+    provider = TablePortOperationFeeProvider(
+        exemptions=(
+            PortOperationFeeExemption(
+                port_name="客户自有码头A",
+                package_type="散粮",
+                fee_type="码头作业费",
+                source="business_confirmation",
+                reason="客户自有码头，经业务确认无需码头作业费",
+                trade_type="内贸",
+                commodity_scope=("玉米", "小麦"),
+            ),
+        )
+    )
+
+    quote = provider.quote(
+        port_name="客户自有码头A",
+        request=RouteRequest(500, "吨", "散粮", "玉米"),
+    )
+
+    assert quote.status == "not_applicable"
+    assert quote.allows_route
+    assert quote.total_cost_yuan == Decimal("0")
+    assert quote.component is None
+    assert quote.exemption is not None
+    assert "不是缺失值补零" in quote.message
+
+
+def test_matching_positive_rate_and_exemption_requires_manual_review():
+    provider = TablePortOperationFeeProvider(
+        (
+            PortOperationFeeRate(
+                port_name="冲突节点A",
+                package_type="散粮",
+                fee_type="码头作业费",
+                unit_price_yuan_per_ton=Decimal("8"),
+                source="positive_source",
+            ),
+        ),
+        exemptions=(
+            PortOperationFeeExemption(
+                port_name="冲突节点A",
+                package_type="散粮",
+                fee_type="码头作业费",
+                source="exemption_source",
+                reason="客户自有码头",
+            ),
+        ),
+    )
+
+    quote = provider.quote(
+        port_name="冲突节点A",
+        request=RouteRequest(500, "吨", "散粮", "玉米"),
+    )
+
+    assert quote.status == "manual_review"
+    assert not quote.allows_route
+    assert "同时存在" in quote.message
 
 
 def test_operation_fee_requires_matching_trade_type():
@@ -369,6 +434,73 @@ def test_duplicate_region_reference_rates_require_manual_review():
     assert "存在多条适用参考费率" in quote.message
 
 
+def test_missing_exact_rate_uses_nearest_applicable_rate_in_same_region():
+    registry = build_node_registry(
+        (
+            NodeRecord("", "揭阳港", 116.37, 23.55),
+            NodeRecord("", "东莞近邻参考港", 113.75, 23.03),
+            NodeRecord("", "广州较远参考港", 113.26, 23.13),
+            NodeRecord("", "漳州异区参考港", 118.05, 24.40),
+        ),
+        auto_alias=False,
+    )
+    target = registry.require("揭阳港")
+    nearby = registry.require("东莞近邻参考港")
+    farther = registry.require("广州较远参考港")
+    fujian = registry.require("漳州异区参考港")
+    provider = TablePortOperationFeeProvider(
+        (
+            PortOperationFeeRate(
+                port_name="东莞近邻参考港",
+                node_id=nearby.node_id,
+                package_type="散粮",
+                fee_type="码头作业费",
+                unit_price_yuan_per_ton=Decimal("31"),
+                source="formal_fee.csv#row=2",
+                commodity_scope=("玉米",),
+            ),
+            PortOperationFeeRate(
+                port_name="广州较远参考港",
+                node_id=farther.node_id,
+                package_type="散粮",
+                fee_type="码头作业费",
+                unit_price_yuan_per_ton=Decimal("40"),
+                source="formal_fee.csv#row=3",
+                commodity_scope=("玉米",),
+            ),
+            PortOperationFeeRate(
+                port_name="漳州异区参考港",
+                node_id=fujian.node_id,
+                package_type="散粮",
+                fee_type="码头作业费",
+                unit_price_yuan_per_ton=Decimal("8"),
+                source="formal_fee.csv#row=4",
+                commodity_scope=("玉米",),
+            ),
+        ),
+        registry=registry,
+        region_resolver=RuleBasedPortRegionResolver(),
+    )
+
+    quote = provider.quote(
+        port_name="揭阳港",
+        port_node_id=target.node_id,
+        request=RouteRequest(500, "吨", "散粮", "玉米"),
+    )
+
+    assert quote.status == "resolved"
+    assert quote.total_cost_yuan == Decimal("15500")
+    assert quote.rate is not None
+    assert quote.rate.source_type == "regional_proxy"
+    assert quote.rate.reference_port_node_id == nearby.node_id
+    assert quote.rate.reference_port_name == "东莞近邻参考港"
+    assert quote.rate.operation_fee_region_code == "pearl_river_delta"
+    assert quote.rate.mapping_rule_id == "nearest_same_region_port_operation_fee"
+    assert "距离=" in (quote.rate.mapping_basis or "")
+    assert quote.component is not None
+    assert "不是目标码头精确真实费率" in quote.component.calculation_detail
+
+
 def test_demo_provider_marks_operation_fee_as_placeholder():
     quote = DemoPortOperationFeeProvider(unit_price_yuan_per_ton=Decimal("5")).quote(
         port_name="任意南港",
@@ -441,6 +573,43 @@ def test_csv_loader_reads_operation_fee_rates(tmp_path):
     assert rates[0].unit_price_yuan_per_ton == Decimal("8")
     assert rates[0].commodity_scope == ("玉米", "小麦")
     assert rates[0].trade_type == "外贸"
+
+
+def test_csv_loader_reads_customer_owned_terminal_exemption(tmp_path):
+    path = tmp_path / "南港码头作业费.csv"
+    write_csv(
+        path,
+        [
+            "南港名称",
+            "包装方式",
+            "贸易类型",
+            "费用类型",
+            "单价",
+            "费用单位",
+            "适用状态",
+            "不适用原因",
+            "适用品种",
+            "数据来源",
+        ],
+        [[
+            "客户自有码头A",
+            "散粮",
+            "内贸",
+            "码头作业费",
+            "0",
+            "元/吨",
+            "not_applicable",
+            "客户自有码头，经业务确认无需码头作业费",
+            "玉米；小麦",
+            "business_confirmation",
+        ]],
+    )
+
+    exemptions = load_port_operation_fee_exemptions(path)
+
+    assert len(exemptions) == 1
+    assert exemptions[0].port_name == "客户自有码头A"
+    assert exemptions[0].reason.startswith("客户自有码头")
 
 
 def write_csv(path, headers, rows):

@@ -87,8 +87,10 @@ Updated: 2026-07-24
 | `包装方式` | 文本 | 是 | 第一版主要为 `散粮` |
 | `贸易类型` | 文本 | 是 | `内贸` 或 `外贸`；当前 Demo 默认 `内贸`，但数据结构保留外贸 |
 | `费用类型` | 文本 | 是 | 第一版固定为 `码头作业费` |
-| `单价` | Decimal | 是 | 必须为大于 0 的数值 |
+| `单价` | Decimal | 是 | `chargeable` 必须大于 0；`not_applicable` 必须为 0 |
 | `费用单位` | 文本 | 是 | 散粮为 `元/吨`；集装箱预留 `元/箱` |
+| `适用状态` | 文本 | 否 | 默认 `chargeable`；客户自有码头等经确认无需作业费时填 `not_applicable` |
+| `不适用原因` | 文本 | 条件必填 | `not_applicable` 必须填写可追溯业务原因 |
 | `来源类型` | 文本 | 否 | 正式数据填 `real_data`；演示占位由代码显式 Provider 生成，不建议写入正式表 |
 | `适用品种` | 列表 | 否 | 不限定时填 `*` |
 | `别名` | 列表 | 否 | 已确认别名 |
@@ -113,13 +115,15 @@ W5 的费用计算口径：
 
 地域代理输出必须标为 `regional_proxy`，保留参考码头、映射依据、规则编号和版本，并声明它不是目标码头精确真实费率。找不到匹配、存在重复、映射未确认、贸易类型或品种不匹配、单位不支持时，Provider 返回 `manual_review`，不输出可计入金额。
 
+客户自有码头经业务确认无需码头作业费时，Provider 返回 `not_applicable`，金额明确为 0，但不生成普通费用分项。该状态表示业务明确不适用，不是缺失数据补零；若同一请求同时匹配正数费率和不适用规则，则仍进入 `manual_review`。
+
 ## 5. `部分码头标签.json` 的当前用法
 
 用户已确认：当前南港“码头作业费”先简化为只考虑 `入库` 费；该 JSON 中 `serviceFees.入库` 是单位费率，散粮单位为 `元/吨`。因此代码提供只读解析能力，将 `入库` 映射为候选 `码头作业费`。
 
 边界：
 
-- 该 JSON 当前是候选源，不自动替换正式 `南港码头作业费.csv`；
+- 该 JSON 默认仍是候选源，不自动替换正式 `南港码头作业费.csv`；
 - `tradeType` 会被保留为正式匹配维度；
 - 同一码头、不同贸易类型、不同品种允许存在不同费率；
 - 名称未匹配标准节点时进入人工复核；后续别名治理按“名称字典 -> 腾讯地图 API -> 人工确认”的顺序推进；
@@ -133,4 +137,39 @@ W5 的费用计算口径：
 python -B -m src.demos.port_label_rules_audit --data-dir data_REAL --query-tencent --region "全国"
 ```
 
-普通审计将待查询名称写入 `output/port_label_tencent_pending.jsonl`；显式执行 Tencent 后，候选写入 `output/port_label_tencent_review.jsonl`。两份文件分离，避免普通审计覆盖已抓取的候选证据。即使 Tencent 返回唯一 top1，也仍只作为人工确认材料；确认后再手工写入 `港口能力表.csv` / `南港码头作业费.csv`，JSON 和审计工具均不得自动写正式表。
+普通审计将待查询名称写入 `output/port_label_tencent_pending.jsonl`；显式执行 Tencent 后，候选写入 `output/port_label_tencent_review.jsonl`。两份文件分离，避免普通审计覆盖已抓取的候选证据。即使 Tencent 返回唯一 top1，也仍只作为人工确认材料。
+
+仅在用户明确批准当前准入口径后，才可显式执行：
+
+```powershell
+python -B -m src.demos.port_label_rules_audit --data-dir data_REAL --apply-approved-w5
+```
+
+该命令准入已绑定标准节点的正数规则，把经确认的 0 元客户自有码头规则写为 `not_applicable`，并忽略其他未绑定节点；若正式表已经存在则拒绝覆盖。
+
+同一审计命令还会生成：
+
+- `output/w5_formal_data_admission_review.csv`
+- `output/w5_formal_data_admission_review.md`
+
+准入清单将候选分为“可申请准入、节点待确认、费用含义待确认”。默认情况下“可申请准入”仍不等于批准；2026-07-27 用户已明确批准当前批次正数候选和客户自有码头 0 元不适用规则进入正式测算，其他未绑定节点忽略。
+
+## 6. 内河驳船运输时效表
+
+模板：`docs/data_templates/内河驳船运输时效.example.csv`
+
+| 字段 | 类型 | 是否必填 | 说明 |
+|---|---:|---:|---|
+| `origin_region_code` | 文本 | 是 | 起点区域编码，必须来自已确认区域映射 |
+| `destination_region_code` | 文本 | 是 | 终点区域编码 |
+| `duration_value` | Decimal | 是 | 大于 0 的运输时效原始值 |
+| `duration_unit` | 文本 | 是 | `天`或`小时`，加载后统一换算为小时 |
+| `time_scope` | 文本 | 是 | 当前简化模型固定为 `complete_segment` |
+| `bidirectional` | 布尔 | 是 | 往返时效一致时填`是` |
+| `source_type` | 文本 | 是 | 正式本地数据为 `real_data` |
+| `source` | 文本 | 是 | 业务确认或维护来源 |
+| `rule_id` | 文本 | 是 | 稳定规则编号 |
+| `rule_version` | 文本 | 是 | 规则版本 |
+| `maintained_at` | 日期/文本 | 否 | 维护日期 |
+
+当前模型把船运时效直接视为对应航运段总时间，不拆分等待、装船、航行、卸船等组成。时效记录不限制包装方式；能否生成驳船运输边仍由港口能力、订单包装/品种和适用驳船航费共同决定。只有时效、没有航费时，可以返回时效结果，但不得生成零费用或可搜索的正式驳船边。

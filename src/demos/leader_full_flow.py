@@ -52,14 +52,14 @@ from src.routing.transport_graph import build_transport_multidigraph
 ORDER_QUANTITY = Decimal("2450")
 ORDER_QUANTITY_UNIT = "吨"
 ORDER_PACKAGE_TYPE = "散粮"
-ORDER_COMMODITY = "小麦"
+ORDER_COMMODITY = "玉米"
 MAX_TRANSFER_PORTS = 5
 
 SOURCE_REAL_DATA = "real_business_data"
 SOURCE_TENCENT = "tencent_map"
 SOURCE_CONFIRMED_RULE = "confirmed_cost_rule"
 SOURCE_DEMO_PLACEHOLDER = "demo_placeholder"
-SOURCE_CONFIRMED_TIME = "confirmed_pure_sailing_time"
+SOURCE_CONFIRMED_TIME = "confirmed_shipping_total_time"
 
 
 class FullFlowDemoError(RuntimeError):
@@ -112,6 +112,7 @@ class FullFlowDemoResult:
     trunk_edge_count: int
     port_operation_fee_source: str | None
     port_operation_fee_included_count: int
+    port_operation_fee_not_applicable_count: int
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -209,6 +210,7 @@ def build_full_flow_demo(
     warnings: list[str] = []
     usable_ports: list[TransferPort] = []
     included_operation_fee_count = 0
+    not_applicable_operation_fee_count = 0
 
     for port in candidate_ports:
         trunk_match = bulk_workbook.match(port.name, request)
@@ -222,7 +224,7 @@ def build_full_flow_demo(
                 port_node_id=port.node_id,
                 request=request,
             )
-            if not operation_fee_quote.is_resolved:
+            if not operation_fee_quote.allows_route:
                 warnings.append(
                     f"候选节点 {port.name} 未形成散船干线段："
                     f"南港码头作业费未确认，{operation_fee_quote.message}"
@@ -245,6 +247,8 @@ def build_full_flow_demo(
         )
         if operation_fee_quote is not None and operation_fee_quote.is_resolved:
             included_operation_fee_count += 1
+        elif operation_fee_quote is not None and operation_fee_quote.is_not_applicable:
+            not_applicable_operation_fee_count += 1
         last_mile_edge, source_trace = _build_last_mile_edge(
             port,
             destination_node_id,
@@ -255,9 +259,14 @@ def build_full_flow_demo(
         )
         edges.extend((trunk_edge, last_mile_edge))
         usable_ports.append(port)
-        trunk_explanation = "费用来自真实散船运价表最新行；时间按领导确认分区纯航行天数换算为小时。"
+        trunk_explanation = (
+            "费用来自真实散船运价表最新行；时间按领导确认分区航运总时效换算为小时，"
+            "模型不拆分等待、装卸和航行组成。"
+        )
         if operation_fee_quote is not None and operation_fee_quote.is_resolved:
             trunk_explanation += "南港码头作业费已通过正式 Provider 作为独立费用组成计入。"
+        elif operation_fee_quote is not None and operation_fee_quote.is_not_applicable:
+            trunk_explanation += operation_fee_quote.message
         edge_sources[trunk_edge.edge_id] = EdgeSourceTrace(
             edge_id=trunk_edge.edge_id,
             labels=(SOURCE_REAL_DATA, SOURCE_CONFIRMED_TIME),
@@ -299,6 +308,7 @@ def build_full_flow_demo(
         trunk_edge_count=len(usable_ports),
         port_operation_fee_source=port_operation_fee_source,
         port_operation_fee_included_count=included_operation_fee_count,
+        port_operation_fee_not_applicable_count=not_applicable_operation_fee_count,
     )
 
 
@@ -467,11 +477,18 @@ def _build_real_trunk_edge(
     cost_result = make_bulk_shipping_cost_result(request, match)
     cost_components = [make_bulk_shipping_cost_component(match)]
     if operation_fee_quote is not None:
-        if not operation_fee_quote.is_resolved:
+        if not operation_fee_quote.allows_route:
             raise FullFlowDemoError(f"候选节点 {port.name} 的南港码头作业费未确认：{operation_fee_quote.message}")
-        if operation_fee_quote.total_cost_yuan is None or operation_fee_quote.component is None:
+        if operation_fee_quote.is_resolved and (
+            operation_fee_quote.total_cost_yuan is None
+            or operation_fee_quote.component is None
+        ):
             raise FullFlowDemoError(f"候选节点 {port.name} 的南港码头作业费结果不完整。")
-        if cost_result.status == "valid" and cost_result.total_cost_yuan is not None:
+        if (
+            operation_fee_quote.is_resolved
+            and cost_result.status == "valid"
+            and cost_result.total_cost_yuan is not None
+        ):
             total_cost = cost_result.total_cost_yuan + operation_fee_quote.total_cost_yuan
             cost_result = CostCalculationResult(
                 status="valid",
@@ -518,6 +535,7 @@ def _load_optional_port_operation_fee_provider(
                 fee_file,
                 registry=registry,
                 region_assignments=port_reference.operation_fee_region_assignments,
+                region_mappings=port_reference.region_mappings,
             ),
             str(fee_file),
         )
@@ -634,7 +652,8 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
     else:
         print(
             f"南港码头作业费表={result.port_operation_fee_source}；"
-            f"已计入散船干线边={result.port_operation_fee_included_count} 条"
+            f"已计入散船干线边={result.port_operation_fee_included_count} 条；"
+            f"明确不适用={result.port_operation_fee_not_applicable_count} 条"
             "（缺失或不匹配的候选不入图，不解释为 0）"
         )
     print("候选南港（本次均已形成可搜索的南港至客户汽运段）：")
@@ -666,13 +685,18 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
 
     print("\n三、测试版数据边界说明")
     print("- 真实输入与规则：本地标准节点、真实散船运价表、已维护汽运价可用时优先采用；道路距离和驾车时间来自腾讯地图；陌生汽运使用已确认规则。")
-    print("- 领导确认规则：北港至南港纯航行时间按南港分区天数换算为小时。")
+    print("- 领导确认规则：北港至南港航运总时效按南港分区天数换算为小时，模型不拆分时间组成。")
     print("- 演示占位数据：仅客户无自有码头画像。")
     print("- 暂未计入：AdditionalFee 仅完成原始记录加载；逐条适用条件未确认前不计入，也不解释为 0。")
     if result.port_operation_fee_source is None:
         print("- 暂未计入：南港码头作业费正式表未接入；当前不计入，也不解释为 0。")
     else:
-        print("- 已接入：南港码头作业费表；未匹配作业费的候选南港不入图，不按 0 参与费用最优。")
+        print(
+            "- 已接入：南港码头作业费表；正数费率计入总费用；"
+            "客户自有码头等明确不适用规则按 0 元通过且保留原因；"
+            "精确费率缺失时可采用同区域最近适用真实码头费率，并明确标记 regional_proxy；"
+            "仍无法解析区域或参考费率的候选南港不入图。"
+        )
     for warning in result.warnings:
         print(f"- 运行提示：{warning}")
 
@@ -699,8 +723,8 @@ def _print_route(route: RouteResult, result: FullFlowDemoResult) -> None:
         print(f"     计费规则={segment.cost_rule_id}/{segment.cost_rule_version}")
     if _route_has_vessel_time_gap(route):
         print(
-            "  时效隐患提示：本路线包含船运段；当前船运时间仅覆盖已确认的散船干线纯航行时间，"
-            "未包含等待、装船、卸船、港口作业、堆存、短倒等时间；驳船航时尚无正式数据源。"
+            "  时效口径提示：本模型将已确认船运时效直接视为对应航运段总时间，"
+            "不再拆分等待、装船、航行、卸船等组成；未配置正式时效的运输段仍不得补零。"
         )
 
 
@@ -738,7 +762,7 @@ def _source_label_text(label: str) -> str:
         SOURCE_TENCENT: "腾讯地图",
         SOURCE_CONFIRMED_RULE: "已确认计费规则",
         SOURCE_DEMO_PLACEHOLDER: "演示占位数据",
-        SOURCE_CONFIRMED_TIME: "已确认纯航行时效",
+        SOURCE_CONFIRMED_TIME: "已确认航运总时效",
     }[label]
 
 
@@ -767,7 +791,7 @@ def _component_source_type_text(source_type: str) -> str:
     return {
         "real_data": "真实业务数据",
         "confirmed_rule": "已确认计费规则",
-        "regional_proxy": "经确认地域代理费率",
+        "regional_proxy": "同区域最近码头代理费率",
         "demo_placeholder": "演示占位数据",
     }.get(source_type, source_type)
 

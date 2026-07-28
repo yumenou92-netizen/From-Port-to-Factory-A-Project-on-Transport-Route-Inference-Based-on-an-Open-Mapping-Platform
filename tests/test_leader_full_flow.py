@@ -20,6 +20,7 @@ from src.domain.freight_rate import create_freight_rate
 from src.geo.coordinate_provider import CoordinateResolution
 from src.geo.distance_provider import RoadRouteResult
 from src.routing.port_operation_fee_provider import (
+    PortOperationFeeExemption,
     PortOperationFeeRate,
     PortOperationFeeRegionAssignment,
     TablePortOperationFeeProvider,
@@ -84,8 +85,8 @@ def test_full_flow_prefers_real_rate_and_limits_placeholders_to_trunk(capsys):
     assert "仅完成结构化加载，未计入本次总费用" in output
     assert "缺失不代表费用为 0" in output
     assert "逐条适用条件未确认前不计入，也不解释为 0" in output
-    assert "时效隐患提示：本路线包含船运段" in output
-    assert "驳船航时尚无正式数据源" in output
+    assert "时效口径提示：本模型将已确认船运时效直接视为对应航运段总时间" in output
+    assert "未配置正式时效的运输段仍不得补零" in output
     assert "三、测试版数据边界说明" in output
 
 
@@ -189,6 +190,45 @@ def test_full_flow_includes_resolved_south_port_operation_fee(capsys):
     assert "已计入合计：93100元" in output
 
 
+def test_full_flow_keeps_candidate_when_operation_fee_is_explicitly_not_applicable(capsys):
+    result = build_full_flow_demo(
+        "北港A",
+        "客户工厂B",
+        bundle=make_bundle(),
+        coordinate_provider=FakeCoordinateProvider(),
+        road_route_provider=FakeRoadRouteProvider(),
+        candidate_limit=1,
+        bulk_workbook=make_bulk_workbook(),
+        port_operation_fee_provider=TablePortOperationFeeProvider(
+            exemptions=(
+                PortOperationFeeExemption(
+                    port_name="钦州港",
+                    node_id=make_node_id("钦州港"),
+                    package_type="散粮",
+                    fee_type="码头作业费",
+                    source="business_confirmation",
+                    reason="客户自有码头，经业务确认无需码头作业费",
+                ),
+            )
+        ),
+        port_operation_fee_source="test_fee_table",
+    )
+
+    assert result.graph_edge_count == 2
+    assert result.port_operation_fee_included_count == 0
+    assert result.port_operation_fee_not_applicable_count == 1
+    assert result.recommendations.lowest_cost.total_cost_yuan == Decimal("73500")
+    assert [
+        component.component_type
+        for component in result.recommendations.lowest_cost.segments[0].cost_components
+    ] == ["bulk_shipping_freight"]
+
+    print_full_flow_result(result)
+    output = capsys.readouterr().out
+    assert "明确不适用=1 条" in output
+    assert "客户自有码头等明确不适用规则按 0 元通过且保留原因" in output
+
+
 def test_full_flow_includes_traceable_regional_proxy_operation_fee(capsys):
     provider = TablePortOperationFeeProvider(
         (
@@ -234,7 +274,7 @@ def test_full_flow_includes_traceable_regional_proxy_operation_fee(capsys):
 
     print_full_flow_result(result)
     output = capsys.readouterr().out
-    assert "来源=经确认地域代理费率" in output
+    assert "来源=同区域最近码头代理费率" in output
 
 
 def test_full_flow_excludes_candidate_with_missing_operation_fee_when_provider_is_connected():

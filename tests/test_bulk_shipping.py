@@ -50,7 +50,8 @@ def test_bulk_shipping_cost_and_time_results_are_traceable(tmp_path):
     assert "散船运价表.xlsx" in cost_result.price_source
     assert time_result.status == "resolved"
     assert time_result.duration_hours == Decimal("168")
-    assert time_result.time_scope == "pure_sailing"
+    assert time_result.time_scope == "complete_segment"
+    assert "模型不拆分" in time_result.message
 
 
 def test_order_over_largest_vessel_requires_manual_review(tmp_path):

@@ -23,7 +23,7 @@ def test_demo_provider_generates_fujian_placeholder_barge_edge():
     assert result.edge is not None
     assert result.edge.transport_mode == "驳船"
     assert result.edge.transport_stage == "barge_last_mile"
-    assert result.edge.time_scope == "pure_sailing"
+    assert result.edge.time_scope == "complete_segment"
     assert result.edge.cost_yuan == Decimal("29400")
     assert result.edge.time_hours == Decimal("8")
     assert result.edge.cost_rule_id == "demo_placeholder_inland_barge_rate_time"
@@ -94,6 +94,43 @@ def test_demo_provider_requires_supported_package_and_quantity_unit():
     assert result.status == "not_applicable"
     assert result.edge is None
     assert "包装/品种" in result.message or "航费/航时表" in result.message
+
+
+def test_bulk_barge_edge_rejects_container_only_terminal_capability():
+    provider = DemoInlandWaterwayBargeProvider(
+        port_capabilities=(
+            PortCapabilityRecord(
+                node_id="node-guangzhou",
+                canonical_name="广州示例港",
+                region_code="pearl_river_delta",
+                can_handle_barge=True,
+                supported_package_types=("散粮",),
+                supported_commodities=("*",),
+                source="demo_placeholder:origin_capability",
+            ),
+            PortCapabilityRecord(
+                node_id="node-foshan-container",
+                canonical_name="佛山示例集装箱码头",
+                region_code="pearl_river_delta",
+                can_handle_barge=True,
+                supported_package_types=("集装箱",),
+                supported_commodities=("*",),
+                source="demo_placeholder:destination_capability",
+            ),
+        )
+    )
+
+    result = provider.build_barge_edge(
+        origin_node_id="node-guangzhou",
+        origin_name="广州示例港",
+        destination_node_id="node-foshan-container",
+        destination_name="佛山示例集装箱码头",
+        request=make_request(),
+    )
+
+    assert result.status == "not_applicable"
+    assert result.edge is None
+    assert "包装/品种" in result.message
 
 
 def test_demo_provider_does_not_emit_real_data_barge_edges():
