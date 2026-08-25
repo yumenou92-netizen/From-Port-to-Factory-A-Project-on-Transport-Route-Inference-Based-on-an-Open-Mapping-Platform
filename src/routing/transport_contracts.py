@@ -5,12 +5,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 
-TransportStage = Literal[
-    "bulk_shipping_trunk",
-    "barge_last_mile",
-    "road_last_mile",
-    "rail_trunk",
-]
+TransportStage = Literal["north_to_south", "south_to_customer"]
+TransportEdgeRole = Literal["trunk", "transfer", "delivery"]
 TimeScope = Literal["pure_sailing", "complete_segment", "road_driving"]
 CostSourceType = Literal[
     "real_data",
@@ -19,19 +15,9 @@ CostSourceType = Literal[
     "demo_placeholder",
 ]
 
-ALLOWED_TRANSPORT_STAGES = {
-    "bulk_shipping_trunk",
-    "barge_last_mile",
-    "road_last_mile",
-    "rail_trunk",
-}
+ALLOWED_TRANSPORT_STAGES = {"north_to_south", "south_to_customer"}
+ALLOWED_TRANSPORT_EDGE_ROLES = {"trunk", "transfer", "delivery"}
 ALLOWED_TIME_SCOPES = {"pure_sailing", "complete_segment", "road_driving"}
-ALLOWED_TIME_SCOPES_BY_STAGE = {
-    "bulk_shipping_trunk": {"complete_segment"},
-    "barge_last_mile": {"complete_segment"},
-    "road_last_mile": {"road_driving", "complete_segment"},
-    "rail_trunk": {"complete_segment"},
-}
 
 
 class TransportContractError(ValueError):
@@ -130,18 +116,16 @@ def _required_text(value: object, field_name: str) -> str:
     return text
 
 
-def validate_stage_time_scope(
+def validate_transport_semantics(
     transport_stage: TransportStage | None,
+    edge_role: TransportEdgeRole | None,
     time_scope: TimeScope | None,
 ) -> None:
     if transport_stage is not None and transport_stage not in ALLOWED_TRANSPORT_STAGES:
         raise TransportContractError(f"不支持的运输阶段：{transport_stage}")
+    if edge_role is not None and edge_role not in ALLOWED_TRANSPORT_EDGE_ROLES:
+        raise TransportContractError(f"不支持的图边角色：{edge_role}")
     if time_scope is not None and time_scope not in ALLOWED_TIME_SCOPES:
         raise TransportContractError(f"不支持的运输时间范围：{time_scope}")
-    if transport_stage is None or time_scope is None:
-        return
-    allowed_scopes = ALLOWED_TIME_SCOPES_BY_STAGE[transport_stage]
-    if time_scope not in allowed_scopes:
-        raise TransportContractError(
-            f"运输阶段 {transport_stage} 不允许使用时间范围 {time_scope}。"
-        )
+    if (transport_stage is None) != (edge_role is None):
+        raise TransportContractError("业务运输段和图边角色必须同时提供或同时为空。")

@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from src.domain.route_request import RouteRequest
 from src.routing.inland_waterway_provider import (
+    DEFAULT_PORT_CAPABILITY_RECORDS,
     DemoInlandWaterwayBargeProvider,
     InlandWaterwayRateTimeRecord,
     PortCapabilityRecord,
@@ -9,7 +10,7 @@ from src.routing.inland_waterway_provider import (
 )
 
 
-def test_demo_provider_generates_fujian_placeholder_barge_edge():
+def test_demo_provider_does_not_assign_barge_capability_to_generic_fuzhou_customer():
     result = DemoInlandWaterwayBargeProvider().build_barge_edge(
         origin_node_id="node-mawei",
         origin_name="马尾港",
@@ -18,18 +19,56 @@ def test_demo_provider_generates_fujian_placeholder_barge_edge():
         request=make_request(),
     )
 
-    assert result.status == "generated"
-    assert result.region_code == "fujian_minjiang"
-    assert result.edge is not None
-    assert result.edge.transport_mode == "驳船"
-    assert result.edge.transport_stage == "barge_last_mile"
-    assert result.edge.time_scope == "complete_segment"
-    assert result.edge.cost_yuan == Decimal("29400")
-    assert result.edge.time_hours == Decimal("8")
-    assert result.edge.cost_rule_id == "demo_placeholder_inland_barge_rate_time"
-    assert result.edge.price_source.startswith("demo_placeholder:")
-    assert result.edge.data_source.startswith("demo_placeholder:")
-    assert result.edge.cost_components[0].is_demo_placeholder
+    assert result.status == "not_applicable"
+    assert result.edge is None
+    assert "未同时匹配到支持区域" in result.message
+
+
+def test_confirmed_fujian_capabilities_are_exact_and_package_specific():
+    capabilities = {
+        record.canonical_name: record
+        for record in DEFAULT_PORT_CAPABILITY_RECORDS
+        if record.region_code == "fujian_minjiang"
+    }
+
+    military = capabilities["军航码头"]
+    assert military.capability_data_confirmed
+    assert military.supported_package_types == ("散粮",)
+    assert military.supported_commodities == ("玉米", "小麦")
+    assert military.can_receive_bulk_shipping
+
+    nanping = capabilities["南平港"]
+    assert nanping.capability_data_confirmed
+    assert nanping.supported_package_types == ("散粮", "集装箱")
+    assert nanping.supported_commodities == ("玉米", "小麦")
+    assert not nanping.can_receive_bulk_shipping
+    assert nanping.supported_transport_modes == ("驳船", "铁路")
+    assert "福州马尾港" not in capabilities
+    assert not any("福州" == alias for record in capabilities.values() for alias in record.aliases)
+
+
+def test_demo_minjiang_scope_only_allows_nanping_and_military_terminal_pair():
+    provider = DemoInlandWaterwayBargeProvider()
+
+    allowed = provider.build_barge_edge(
+        origin_node_id="node-nanping",
+        origin_name="南平港",
+        destination_node_id="node-military",
+        destination_name="军航码头",
+        request=make_request(),
+    )
+    excluded = provider.build_barge_edge(
+        origin_node_id="node-mawei",
+        origin_name="福州马尾港",
+        destination_node_id="node-military",
+        destination_name="军航码头",
+        request=make_request(),
+    )
+
+    assert allowed.status == "generated"
+    assert allowed.edge is not None
+    assert excluded.status == "not_applicable"
+    assert excluded.edge is None
 
 
 def test_demo_provider_generates_pearl_delta_placeholder_barge_edge():
@@ -65,8 +104,8 @@ def test_demo_provider_does_not_generate_for_other_regions():
 
 def test_demo_provider_does_not_generate_across_two_supported_regions():
     result = DemoInlandWaterwayBargeProvider().build_barge_edge(
-        origin_node_id="node-mawei",
-        origin_name="马尾港",
+        origin_node_id="node-nanping",
+        origin_name="南平港",
         destination_node_id="node-guangzhou",
         destination_name="广州客户码头",
         request=make_request(),
@@ -116,6 +155,7 @@ def test_bulk_barge_edge_rejects_container_only_terminal_capability():
                 supported_package_types=("集装箱",),
                 supported_commodities=("*",),
                 source="demo_placeholder:destination_capability",
+                is_transfer_port=True,
             ),
         )
     )
@@ -183,6 +223,8 @@ def test_region_mapping_and_capability_records_define_future_table_contract():
         source="demo_placeholder:port_capability",
         infrastructure_type="seaport",
         can_receive_bulk_shipping=True,
+        is_transfer_port=True,
+        confirmation_status="confirmed",
     )
     rate_time = InlandWaterwayRateTimeRecord(
         region_code="pearl_river_delta",
@@ -200,6 +242,7 @@ def test_region_mapping_and_capability_records_define_future_table_contract():
     assert capability.matches(node_id="node-guangzhou", name="任意名称")
     assert capability.infrastructure_type == "seaport"
     assert capability.can_receive_bulk_shipping
+    assert capability.transfer_port_role_confirmed
     assert capability.supports_order(make_request(commodity="小麦"))
     assert rate_time.supports_order(make_request(commodity="玉米"))
     assert not rate_time.supports_order(make_request(commodity="小麦"))

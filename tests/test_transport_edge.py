@@ -123,14 +123,18 @@ def test_edge_preserves_stage_time_scope_and_validated_cost_components():
         make_cost_result(),
         make_time_result(time_scope="road_driving"),
         commodity="玉米",
-        transport_stage="road_last_mile",
+        transport_stage="south_to_customer",
+        edge_role="delivery",
         cost_components=(component,),
     )
 
     attributes = edge.to_graph_attributes()
 
-    assert edge.transport_stage == "road_last_mile"
+    assert edge.transport_stage == "south_to_customer"
+    assert edge.edge_role == "delivery"
     assert edge.time_scope == "road_driving"
+    assert attributes["transport_stage"] == "south_to_customer"
+    assert attributes["edge_role"] == "delivery"
     assert attributes["cost_components"] == (component,)
 
 
@@ -179,13 +183,14 @@ def test_manual_review_outcome_makes_edge_unavailable_with_trace():
 
 
 @pytest.mark.parametrize(
-    ("stage", "scope", "message"),
+    ("stage", "role", "scope", "message"),
     [
-        ("unknown_stage", "complete_segment", "不支持的运输阶段"),
-        ("bulk_shipping_trunk", "road_driving", "不允许使用时间范围"),
+        ("unknown_stage", "delivery", "complete_segment", "不支持的运输阶段"),
+        ("south_to_customer", "unknown_role", "road_driving", "不支持的图边角色"),
+        ("south_to_customer", None, "road_driving", "必须同时提供"),
     ],
 )
-def test_edge_rejects_invalid_stage_time_scope_contract(stage, scope, message):
+def test_edge_rejects_invalid_transport_semantics(stage, role, scope, message):
     with pytest.raises(TransportEdgeError, match=message):
         build_transport_edge(
             make_rate(),
@@ -193,6 +198,7 @@ def test_edge_rejects_invalid_stage_time_scope_contract(stage, scope, message):
             make_time_result(time_scope=scope),
             commodity="玉米",
             transport_stage=stage,
+            edge_role=role,
         )
 
 
@@ -360,7 +366,8 @@ def test_edge_id_distinguishes_stage_time_scope_and_cost_component_trace():
         make_cost_result(),
         make_time_result(),
         commodity="玉米",
-        transport_stage="road_last_mile",
+        transport_stage="south_to_customer",
+        edge_role="delivery",
     )
     scoped = build_transport_edge(
         make_rate(),

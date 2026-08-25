@@ -1,19 +1,50 @@
 from __future__ import annotations
 
 import argparse
-import math
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Callable, Sequence
 
+from src.application.route_planning import (
+    CandidateDecisionStage,
+    CandidateDecisionStatus,
+    EdgeGeometryTrace,
+    EdgeSourceTrace,
+    RoutePlanningContractError,
+    RoutePlanningRequest,
+    RoutePlanningResponse,
+    RoutePlanningService,
+    SouthPortCandidateDecision,
+    TransferPort,
+)
+from src.application.south_port_selection import (
+    SouthPortSelectionError,
+    haversine_km,
+    select_automatic_south_ports,
+    select_requested_south_port,
+)
 from src.data.loaders import (
     DataLoadError,
     RealDataBundle,
     data_dir_from_env,
     load_real_data_bundle,
     make_node_id,
+)
+from src.data.node_master_capabilities import (
+    NodeMasterCapabilityError,
+    build_barge_capabilities_from_node_master,
+)
+from src.data.inland_waterway_freight import (
+    InlandWaterwayFreightLoadError,
+    find_optional_inland_waterway_freight_file,
+    load_inland_waterway_freight_records,
+)
+from src.data.inland_waterway_time import (
+    InlandWaterwayTimeLoadError,
+    find_optional_inland_waterway_time_file,
+    load_inland_waterway_time_records,
 )
 from src.data.port_reference import PortReferenceLoadError, load_port_reference_tables
 from src.domain.cost_rules import CostCalculationResult, DEFAULT_COST_RULE_ENGINE, is_truck_transport_mode
@@ -23,6 +54,16 @@ from src.routing.bulk_shipping_provider import (
     make_bulk_shipping_cost_result,
     make_bulk_shipping_rate,
     make_bulk_shipping_time_result,
+)
+from src.routing.formal_inland_waterway_provider import (
+    ExactOdInlandWaterwayBargeProvider,
+    TableInlandWaterwayBargeProvider,
+)
+from src.routing.inland_waterway_provider import (
+    DEFAULT_PORT_CAPABILITY_RECORDS,
+    DEFAULT_REGION_MAPPING_RECORDS,
+    InlandWaterwayBargeProvider,
+    PortCapabilityRecord,
 )
 from src.domain.freight_rate import FreightRate, create_freight_rate
 from src.domain.latest_rate_selector import select_latest_freight_rates
@@ -49,11 +90,12 @@ from src.routing.transport_edge import TransportEdge, build_transport_edge, make
 from src.routing.transport_graph import build_transport_multidigraph
 
 
-ORDER_QUANTITY = Decimal("2450")
+ORDER_QUANTITY = Decimal("3160")
 ORDER_QUANTITY_UNIT = "吨"
 ORDER_PACKAGE_TYPE = "散粮"
 ORDER_COMMODITY = "玉米"
-MAX_TRANSFER_PORTS = 5
+MAX_TRANSFER_PORTS = 7
+MAX_INLAND_TRANSFER_PORTS_PER_SOUTH_PORT = 3
 
 SOURCE_REAL_DATA = "real_business_data"
 SOURCE_TENCENT = "tencent_map"
@@ -80,61 +122,53 @@ DEMO_TRUNK_PROFILES = (
 )
 
 
-@dataclass(frozen=True)
-class TransferPort:
-    node_id: str
-    name: str
-    point: GeoPoint
-    straight_line_km_to_factory: Decimal
-
-
-@dataclass(frozen=True)
-class EdgeSourceTrace:
-    edge_id: str
-    labels: tuple[str, ...]
-    explanation: str
-
-
-@dataclass(frozen=True)
-class FullFlowDemoResult:
-    origin_name: str
-    destination_name: str
-    origin_resolution: CoordinateResolution
-    destination_resolution: CoordinateResolution
-    request: RouteRequest
-    candidate_ports: tuple[TransferPort, ...]
-    graph_edge_count: int
-    recommendations: RouteRecommendationResults
-    node_names: dict[str, str]
-    edge_sources: dict[str, EdgeSourceTrace]
-    warnings: tuple[str, ...]
-    additional_fee_count: int
-    trunk_edge_count: int
-    port_operation_fee_source: str | None
-    port_operation_fee_included_count: int
-    port_operation_fee_not_applicable_count: int
+# Transitional import name retained while current Demo callers migrate to the
+# application-owned response type.
+FullFlowDemoResult = RoutePlanningResponse
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(_module_args() if argv is None else argv)
-    origin_name = args.origin or _prompt_required("请输入北港点 A：")
-    destination_name = args.destination or _prompt_required("请输入客户工厂 B：")
+    origin_name = args.origin or _prompt_required("请输入北港运输起点 O：")
+    destination_name = args.destination or _prompt_required("请输入客户工厂终点 D：")
 
     try:
+        planning_request = RoutePlanningRequest(
+            origin=origin_name,
+            destination=destination_name,
+            south_port=args.south_port,
+            region=args.region,
+            request=RouteRequest(
+                quantity=ORDER_QUANTITY,
+                quantity_unit=ORDER_QUANTITY_UNIT,
+                package_type=ORDER_PACKAGE_TYPE,
+                commodity=ORDER_COMMODITY,
+            ),
+        )
         bundle = load_real_data_bundle(data_dir_from_env())
         registry = bundle.node_registry
-        coordinate_provider = LocalFirstCoordinateProvider(
-            registry,
-            fallback_provider=TencentMapCoordinateProvider.from_env(region=args.region),
+        service = RoutePlanningService(
+            lambda request: plan_full_flow(
+                request,
+                bundle=bundle,
+                coordinate_provider_factory=lambda region: (
+                    LocalFirstCoordinateProvider(
+                        registry,
+                        fallback_provider=TencentMapCoordinateProvider.from_env(
+                            region=region
+                        ),
+                    )
+                ),
+                road_route_provider=TencentMapDrivingRouteProvider.from_env(),
+            )
         )
-        result = build_full_flow_demo(
-            origin_name,
-            destination_name,
-            bundle=bundle,
-            coordinate_provider=coordinate_provider,
-            road_route_provider=TencentMapDrivingRouteProvider.from_env(),
-        )
-    except (DataLoadError, TencentMapProviderError, FullFlowDemoError) as exc:
+        result = service.plan(planning_request)
+    except (
+        DataLoadError,
+        RoutePlanningContractError,
+        TencentMapProviderError,
+        FullFlowDemoError,
+    ) as exc:
         raise SystemExit(f"全流程演示未完成：{exc}") from exc
 
     print_full_flow_result(result)
@@ -144,8 +178,42 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="北港至客户工厂全流程展示_第一版验证Demo_First_Version_07_24")
     parser.add_argument("--origin", help="北港点 A；不提供时进入交互输入。")
     parser.add_argument("--destination", help="客户工厂 B；不提供时进入交互输入。")
+    parser.add_argument("--south-port", help="可选南港；提供后仅测算该南港，不再自动筛选。")
     parser.add_argument("--region", default="全国", help="腾讯地点搜索区域，默认全国。")
     return parser.parse_args(list(argv))
+
+
+def plan_full_flow(
+    planning_request: RoutePlanningRequest,
+    *,
+    bundle: RealDataBundle,
+    coordinate_provider_factory: Callable[[str], CoordinateProvider],
+    road_route_provider: RoadRouteProvider,
+    candidate_limit: int = MAX_TRANSFER_PORTS,
+    bulk_workbook: BulkShippingWorkbook | None = None,
+    port_operation_fee_provider: SouthPortOperationFeeProvider | None = None,
+    port_operation_fee_source: str | None = None,
+    inland_waterway_provider: InlandWaterwayBargeProvider | None = None,
+    inland_waterway_source: str | None = None,
+) -> RoutePlanningResponse:
+    """Run the existing full-flow engine through the application contract."""
+
+    coordinate_provider = coordinate_provider_factory(planning_request.region)
+    return build_full_flow_demo(
+        planning_request.origin,
+        planning_request.destination,
+        bundle=bundle,
+        coordinate_provider=coordinate_provider,
+        road_route_provider=road_route_provider,
+        candidate_limit=candidate_limit,
+        bulk_workbook=bulk_workbook,
+        port_operation_fee_provider=port_operation_fee_provider,
+        port_operation_fee_source=port_operation_fee_source,
+        inland_waterway_provider=inland_waterway_provider,
+        inland_waterway_source=inland_waterway_source,
+        selected_south_port=planning_request.south_port,
+        request=planning_request.request,
+    )
 
 
 def build_full_flow_demo(
@@ -159,8 +227,12 @@ def build_full_flow_demo(
     bulk_workbook: BulkShippingWorkbook | None = None,
     port_operation_fee_provider: SouthPortOperationFeeProvider | None = None,
     port_operation_fee_source: str | None = None,
-) -> FullFlowDemoResult:
-    request = RouteRequest(
+    inland_waterway_provider: InlandWaterwayBargeProvider | None = None,
+    inland_waterway_source: str | None = None,
+    selected_south_port: str | None = None,
+    request: RouteRequest | None = None,
+) -> RoutePlanningResponse:
+    request = request or RouteRequest(
         quantity=ORDER_QUANTITY,
         quantity_unit=ORDER_QUANTITY_UNIT,
         package_type=ORDER_PACKAGE_TYPE,
@@ -183,6 +255,13 @@ def build_full_flow_demo(
         ) = _load_optional_port_operation_fee_provider(bundle.data_dir, registry)
     elif port_operation_fee_source is None:
         port_operation_fee_source = "injected_provider"
+    if inland_waterway_provider is None:
+        (
+            inland_waterway_provider,
+            inland_waterway_source,
+        ) = _load_optional_inland_waterway_provider(bundle, registry)
+    elif inland_waterway_source is None:
+        inland_waterway_source = "injected_provider"
 
     known_rates, conflicted_origins = _known_last_mile_rates(
         bundle.freight_rates,
@@ -190,15 +269,46 @@ def build_full_flow_demo(
         destination,
         registry,
     )
-    candidate_ports = _select_transfer_ports(
-        bundle,
-        request,
-        destination_point,
-        origin_node_id=origin_node_id,
-        excluded_node_ids=conflicted_origins,
-        preferred_node_ids=set(known_rates),
-        limit=candidate_limit,
+    alternative_transport_origin_node_ids = set()
+    applicable_origin_node_ids = getattr(
+        inland_waterway_provider,
+        "applicable_origin_node_ids",
+        None,
     )
+    if callable(applicable_origin_node_ids):
+        alternative_transport_origin_node_ids = set(
+            applicable_origin_node_ids(request)
+        )
+    try:
+        if selected_south_port:
+            selection = select_requested_south_port(
+                selected_south_port,
+                registry=registry,
+                freight_rates=bundle.freight_rates,
+                request=request,
+                destination=destination_point,
+                origin_node_id=origin_node_id,
+                excluded_node_ids=conflicted_origins,
+                node_master_entries=bundle.node_master_entries,
+                port_node_entries=bundle.port_node_entries,
+            )
+        else:
+            selection = select_automatic_south_ports(
+                bundle,
+                request,
+                destination_point,
+                origin_node_id=origin_node_id,
+                excluded_node_ids=conflicted_origins,
+                preferred_node_ids=set(known_rates),
+                limit=candidate_limit,
+                alternative_transport_origin_node_ids=(
+                    alternative_transport_origin_node_ids
+                ),
+            )
+    except SouthPortSelectionError as exc:
+        raise FullFlowDemoError(str(exc)) from exc
+    candidate_ports = selection.ports
+    candidate_decisions = selection.decisions
     if not candidate_ports:
         raise FullFlowDemoError("真实运价始发端中没有可用于本次订单的候选南港节点。")
 
@@ -207,14 +317,33 @@ def build_full_flow_demo(
     )
     edges: list[TransportEdge] = []
     edge_sources: dict[str, EdgeSourceTrace] = {}
+    edge_geometries: dict[str, EdgeGeometryTrace] = {}
     warnings: list[str] = []
+    candidate_decisions_by_node = {
+        decision.node_id: decision for decision in candidate_decisions
+    }
+    candidate_decision_order = tuple(
+        decision.node_id for decision in candidate_decisions
+    )
     usable_ports: list[TransferPort] = []
     included_operation_fee_count = 0
     not_applicable_operation_fee_count = 0
-
+    barge_edge_count = 0
+    truck_edge_count = 0
+    barge_placeholder_capability_count = 0
+    south_to_customer_options_by_port: dict[str, tuple[str, ...]] = {}
+    intermediate_node_names: dict[str, str] = {}
+    used_intermediate_ports: dict[str, TransferPort] = {}
     for port in candidate_ports:
         trunk_match = bulk_workbook.match(port.name, request)
         if not trunk_match.is_resolved:
+            _update_candidate_decision(
+                candidate_decisions_by_node,
+                port,
+                status="excluded",
+                stage="north_to_south",
+                reason=trunk_match.message,
+            )
             warnings.append(f"候选节点 {port.name} 未形成散船干线段：{trunk_match.message}")
             continue
         operation_fee_quote: PortOperationFeeQuote | None = None
@@ -225,18 +354,18 @@ def build_full_flow_demo(
                 request=request,
             )
             if not operation_fee_quote.allows_route:
+                _update_candidate_decision(
+                    candidate_decisions_by_node,
+                    port,
+                    status="excluded",
+                    stage="port_operation_fee",
+                    reason=operation_fee_quote.message,
+                )
                 warnings.append(
                     f"候选节点 {port.name} 未形成散船干线段："
                     f"南港码头作业费未确认，{operation_fee_quote.message}"
                 )
                 continue
-        road_result = road_route_provider.get_route(
-            RoadRouteRequest(origin=port.point, destination=destination_point)
-        )
-        if not road_result.is_resolved:
-            warnings.append(f"候选节点 {port.name} 未形成道路运输段：{road_result.message}")
-            continue
-
         trunk_edge = _build_real_trunk_edge(
             origin.canonical_name or origin.query_name,
             origin_node_id,
@@ -245,20 +374,223 @@ def build_full_flow_demo(
             bulk_workbook,
             operation_fee_quote=operation_fee_quote,
         )
+        south_to_customer_edges: list[TransportEdge] = []
+        south_to_customer_sources: list[EdgeSourceTrace] = []
+        south_to_customer_options: list[str] = []
+
+        road_result = road_route_provider.get_route(
+            RoadRouteRequest(origin=port.point, destination=destination_point)
+        )
+        if road_result.is_resolved:
+            customer_road_edge, source_trace = _build_customer_delivery_road_edge(
+                port,
+                destination_node_id,
+                destination_name,
+                request,
+                road_result,
+                known_rate=known_rates.get(port.node_id),
+            )
+            south_to_customer_edges.append(customer_road_edge)
+            south_to_customer_sources.append(source_trace)
+            south_to_customer_options.append("汽运")
+            truck_edge_count += 1
+            if road_result.polyline_points:
+                edge_geometries[customer_road_edge.edge_id] = EdgeGeometryTrace(
+                    edge_id=customer_road_edge.edge_id,
+                    kind="tencent_driving_polyline",
+                    source=road_result.source,
+                    points=road_result.polyline_points,
+                    is_schematic=False,
+                    message=(
+                        "道路折线与本次费用、时效测算使用同一次腾讯驾车响应；"
+                        "仅用于地图展示，不参与路径搜索。"
+                    ),
+                )
+            else:
+                warnings.append(
+                    f"候选节点 {port.name} 的腾讯驾车结果未返回可用道路折线；"
+                    "费用和时效仍可用，Web 地图不以端点直线冒充真实道路。"
+                )
+        else:
+            warnings.append(
+                f"候选节点 {port.name} 未形成道路运输段：{road_result.message}"
+            )
+
+        if inland_waterway_provider is not None:
+            if getattr(
+                inland_waterway_provider,
+                "supports_direct_delivery",
+                False,
+            ):
+                direct_barge_result = (
+                    inland_waterway_provider.build_barge_edge(
+                        origin_node_id=port.node_id,
+                        origin_name=port.name,
+                        destination_node_id=destination_node_id,
+                        destination_name=destination_name,
+                        request=request,
+                        transport_stage="south_to_customer",
+                        edge_role="delivery",
+                    )
+                )
+                if (
+                    direct_barge_result.is_generated
+                    and direct_barge_result.edge is not None
+                ):
+                    south_to_customer_edges.append(
+                        direct_barge_result.edge
+                    )
+                    south_to_customer_options.append("驳船直达客户")
+                    barge_edge_count += 1
+                    south_to_customer_sources.append(
+                        EdgeSourceTrace(
+                            edge_id=direct_barge_result.edge.edge_id,
+                            labels=(
+                                SOURCE_REAL_DATA,
+                                SOURCE_CONFIRMED_TIME,
+                            ),
+                            explanation=(
+                                f"{direct_barge_result.message}"
+                                "终点为本次客户节点，不赋予中转港角色；"
+                                f"来源追溯={'；'.join(direct_barge_result.source_refs)}"
+                            ),
+                        )
+                    )
+                elif direct_barge_result.status == "manual_review":
+                    warnings.append(
+                        f"候选节点 {port.name} 至客户 {destination_name} "
+                        f"的直达驳船段待确认：{direct_barge_result.message}"
+                    )
+
+            inland_transfer_ports, endpoint_warnings = _provider_inland_transfer_ports(
+                inland_waterway_provider,
+                registry=registry,
+                origin_port=port,
+                destination=destination_point,
+                request=request,
+            )
+            warnings.extend(endpoint_warnings)
+            completed_transfer_path_count = 0
+            inspected_transfer_port_count = 0
+            for inland_port in inland_transfer_ports:
+                if (
+                    completed_transfer_path_count
+                    >= MAX_INLAND_TRANSFER_PORTS_PER_SOUTH_PORT
+                ):
+                    break
+                inspected_transfer_port_count += 1
+                barge_result = inland_waterway_provider.build_barge_edge(
+                    origin_node_id=port.node_id,
+                    origin_name=port.name,
+                    destination_node_id=inland_port.node_id,
+                    destination_name=inland_port.name,
+                    request=request,
+                    transport_stage="south_to_customer",
+                    edge_role="transfer",
+                )
+                if barge_result.is_generated and barge_result.edge is not None:
+                    inland_road_result = road_route_provider.get_route(
+                        RoadRouteRequest(
+                            origin=inland_port.point,
+                            destination=destination_point,
+                        )
+                    )
+                    if not inland_road_result.is_resolved:
+                        warnings.append(
+                            f"候选节点 {port.name} 经 {inland_port.name} 的驳船中转未形成完整路径："
+                            f"{inland_road_result.message}"
+                        )
+                        continue
+                    inland_truck_edge, inland_truck_source = _build_customer_delivery_road_edge(
+                        inland_port,
+                        destination_node_id,
+                        destination_name,
+                        request,
+                        inland_road_result,
+                        known_rate=known_rates.get(inland_port.node_id),
+                    )
+                    south_to_customer_edges.extend(
+                        (barge_result.edge, inland_truck_edge)
+                    )
+                    completed_transfer_path_count += 1
+                    south_to_customer_options.append(f"驳船经{inland_port.name}中转")
+                    barge_edge_count += 1
+                    truck_edge_count += 1
+                    intermediate_node_names[inland_port.node_id] = inland_port.name
+                    used_intermediate_ports[inland_port.node_id] = inland_port
+                    uses_placeholder_capability = (
+                        "demo_placeholder" in barge_result.message
+                    )
+                    if uses_placeholder_capability:
+                        barge_placeholder_capability_count += 1
+                    labels = [SOURCE_REAL_DATA, SOURCE_CONFIRMED_TIME]
+                    if uses_placeholder_capability:
+                        labels.append(SOURCE_DEMO_PLACEHOLDER)
+                    south_to_customer_sources.append(
+                        EdgeSourceTrace(
+                            edge_id=barge_result.edge.edge_id,
+                            labels=tuple(labels),
+                            explanation=(
+                                f"{barge_result.message}"
+                                f"来源追溯={'；'.join(barge_result.source_refs)}"
+                            ),
+                        )
+                    )
+                    south_to_customer_sources.append(inland_truck_source)
+                    if inland_road_result.polyline_points:
+                        edge_geometries[
+                            inland_truck_edge.edge_id
+                        ] = EdgeGeometryTrace(
+                            edge_id=inland_truck_edge.edge_id,
+                            kind="tencent_driving_polyline",
+                            source=inland_road_result.source,
+                            points=inland_road_result.polyline_points,
+                            is_schematic=False,
+                            message=(
+                                f"{inland_port.name}至客户的道路折线与费用、时效测算"
+                                "使用同一次腾讯驾车响应；仅用于地图展示。"
+                            ),
+                        )
+                elif barge_result.status == "manual_review":
+                    warnings.append(
+                        f"候选节点 {port.name} 至 {inland_port.name} 的驳船中转段待确认："
+                        f"{barge_result.message}"
+                    )
+            if len(inland_transfer_ports) > inspected_transfer_port_count:
+                warnings.append(
+                    f"候选南港 {port.name} 有 {len(inland_transfer_ports)} 个"
+                    "精确 OD 驳船端点；本次按离客户直线距离依次检查，"
+                    f"已形成 {completed_transfer_path_count} 条完整驳船中转路径，"
+                    f"达到上限 {MAX_INLAND_TRANSFER_PORTS_PER_SOUTH_PORT} 后停止展开；"
+                    "其余端点仍保留在离线全量审计范围。"
+                )
+
+        if not south_to_customer_edges:
+            _update_candidate_decision(
+                candidate_decisions_by_node,
+                port,
+                status="excluded",
+                stage="south_to_customer",
+                reason="未形成可到达客户工厂的汽运或驳船中转运输边。",
+            )
+            continue
         if operation_fee_quote is not None and operation_fee_quote.is_resolved:
             included_operation_fee_count += 1
         elif operation_fee_quote is not None and operation_fee_quote.is_not_applicable:
             not_applicable_operation_fee_count += 1
-        last_mile_edge, source_trace = _build_last_mile_edge(
-            port,
-            destination_node_id,
-            destination_name,
-            request,
-            road_result,
-            known_rate=known_rates.get(port.node_id),
-        )
-        edges.extend((trunk_edge, last_mile_edge))
+        edges.append(trunk_edge)
+        edges.extend(south_to_customer_edges)
         usable_ports.append(port)
+        _update_candidate_decision(
+            candidate_decisions_by_node,
+            port,
+            status="included",
+            stage="graph",
+            reason="北港散船干线和至少一种南港后运输方案均已形成可搜索边。",
+        )
+        south_to_customer_options_by_port[port.node_id] = tuple(
+            south_to_customer_options
+        )
         trunk_explanation = (
             "费用来自真实散船运价表最新行；时间按领导确认分区航运总时效换算为小时，"
             "模型不拆分等待、装卸和航行组成。"
@@ -272,11 +604,31 @@ def build_full_flow_demo(
             labels=(SOURCE_REAL_DATA, SOURCE_CONFIRMED_TIME),
             explanation=trunk_explanation,
         )
-        edge_sources[last_mile_edge.edge_id] = source_trace
+        for source_trace in south_to_customer_sources:
+            edge_sources[source_trace.edge_id] = source_trace
 
     if not usable_ports:
         detail = "；".join(warnings) or "候选南港均缺少可用道路距离和时间。"
         raise FullFlowDemoError(detail)
+
+    unique_edges = {edge.edge_id: edge for edge in edges}
+    duplicate_edge_count = len(edges) - len(unique_edges)
+    edges = list(unique_edges.values())
+    if duplicate_edge_count:
+        warnings.append(
+            f"本次有 {duplicate_edge_count} 条重复图边已按 edge_id 合并；"
+            "常见原因是多个南港共享同一中转港至客户的后续运输段。"
+        )
+    barge_edge_count = sum(
+        edge.transport_stage == "south_to_customer"
+        and edge.transport_mode == "驳船"
+        for edge in edges
+    )
+    truck_edge_count = sum(
+        edge.transport_stage == "south_to_customer"
+        and edge.transport_mode == "汽运"
+        for edge in edges
+    )
 
     graph_result = build_transport_multidigraph(edges, allow_unregistered_nodes=True)
     searches = search_cost_and_time_paths(graph_result.graph, origin_node_id, destination_node_id)
@@ -288,27 +640,40 @@ def build_full_flow_demo(
         origin_node_id: origin.canonical_name or origin.query_name,
         destination_node_id: destination.canonical_name or destination.query_name,
         **{port.node_id: port.name for port in usable_ports},
+        **intermediate_node_names,
     }
     if conflicted_origins:
         warnings.append("同日运价冲突的真实路线已排除，未用陌生路线公式覆盖冲突记录。")
 
-    return FullFlowDemoResult(
+    return RoutePlanningResponse(
         origin_name=origin_name,
         destination_name=destination_name,
+        selected_south_port=selected_south_port,
         origin_resolution=origin,
         destination_resolution=destination,
         request=request,
         candidate_ports=tuple(usable_ports),
+        intermediate_ports=tuple(used_intermediate_ports.values()),
         graph_edge_count=graph_result.added_edge_count,
         recommendations=recommendations,
         node_names=node_names,
         edge_sources=edge_sources,
+        edge_geometries=edge_geometries,
         warnings=tuple(warnings),
         additional_fee_count=len(bundle.additional_fees),
         trunk_edge_count=len(usable_ports),
         port_operation_fee_source=port_operation_fee_source,
         port_operation_fee_included_count=included_operation_fee_count,
         port_operation_fee_not_applicable_count=not_applicable_operation_fee_count,
+        inland_waterway_source=inland_waterway_source,
+        barge_edge_count=barge_edge_count,
+        barge_placeholder_capability_count=barge_placeholder_capability_count,
+        truck_edge_count=truck_edge_count,
+        south_to_customer_options_by_port=south_to_customer_options_by_port,
+        candidate_decisions=tuple(
+            candidate_decisions_by_node[node_id]
+            for node_id in candidate_decision_order
+        ),
     )
 
 
@@ -349,62 +714,80 @@ def _known_last_mile_rates(
     return selected, conflicted
 
 
-def _select_transfer_ports(
-    bundle: RealDataBundle,
-    request: RouteRequest,
-    destination: GeoPoint,
+def _provider_inland_transfer_ports(
+    provider: InlandWaterwayBargeProvider,
     *,
-    origin_node_id: str,
-    excluded_node_ids: set[str],
-    preferred_node_ids: set[str],
-    limit: int,
-) -> tuple[TransferPort, ...]:
-    if limit <= 0:
-        raise FullFlowDemoError("候选南港数量必须大于 0。")
-    registry = bundle.node_registry or build_node_registry(bundle.nodes)
-    origins: dict[str, TransferPort] = {}
-    for rate in bundle.freight_rates:
-        if (
-            not is_truck_transport_mode(rate.transport_mode)
-            or rate.package_type != request.package_type
-            or not rate.supports_commodity(request.commodity)
-            or rate.from_node_id is None
-            or rate.from_node_id == origin_node_id
-            or rate.from_node_id in excluded_node_ids
-        ):
-            continue
-        node = registry.nodes.get(rate.from_node_id)
+    registry: NodeRegistry,
+    origin_port: TransferPort,
+    destination: GeoPoint,
+    request: RouteRequest,
+) -> tuple[tuple[TransferPort, ...], tuple[str, ...]]:
+    """Resolve Provider-declared endpoints to registered graph nodes.
+
+    The orchestration layer does not own a fixed list of transfer ports.  It
+    consumes capability-backed endpoint candidates from the active Provider and
+    skips candidates that cannot be resolved to one standard node.
+    """
+    ports: list[TransferPort] = []
+    warnings: list[str] = []
+    seen_node_ids: set[str] = set()
+    for candidate in provider.list_destination_candidates(
+        origin_node_id=origin_port.node_id,
+        origin_name=origin_port.name,
+        request=request,
+    ):
+        node = (
+            registry.nodes.get(candidate.node_id)
+            if candidate.node_id is not None
+            else registry.lookup(candidate.canonical_name)
+        )
         if node is None:
+            warnings.append(
+                f"驳船 Provider 候选端点 {candidate.canonical_name} "
+                "未解析到唯一标准节点，本次未参与构图。"
+            )
             continue
-        point = GeoPoint(Decimal(str(node.longitude)), Decimal(str(node.latitude)))
-        origins.setdefault(
-            node.node_id,
+        if node.node_id == origin_port.node_id or node.node_id in seen_node_ids:
+            continue
+        seen_node_ids.add(node.node_id)
+        point = GeoPoint(
+            Decimal(str(node.longitude)),
+            Decimal(str(node.latitude)),
+        )
+        ports.append(
             TransferPort(
                 node_id=node.node_id,
                 name=node.canonical_name,
                 point=point,
-                straight_line_km_to_factory=_haversine_km(point, destination),
-            ),
+                straight_line_km_to_factory=haversine_km(point, destination),
+            )
         )
-
-    all_candidates = list(origins.values())
-    port_like = [port for port in all_candidates if "港" in port.name or "码头" in port.name]
-    candidates = port_like if len(port_like) >= min(2, limit) else all_candidates
-    candidate_ids = {port.node_id for port in candidates}
-    candidates.extend(
-        port
-        for port in all_candidates
-        if port.node_id in preferred_node_ids and port.node_id not in candidate_ids
+    ranked_ports = sorted(
+        ports,
+        key=lambda port: (
+            port.straight_line_km_to_factory,
+            port.name,
+        ),
     )
-    return tuple(
-        sorted(
-            candidates,
-            key=lambda item: (
-                item.node_id not in preferred_node_ids,
-                item.straight_line_km_to_factory,
-                item.name,
-            ),
-        )[:limit]
+    return tuple(ranked_ports), tuple(warnings)
+
+
+def _update_candidate_decision(
+    decisions: dict[str, SouthPortCandidateDecision],
+    port: TransferPort,
+    *,
+    status: CandidateDecisionStatus,
+    stage: CandidateDecisionStage,
+    reason: str,
+) -> None:
+    current = decisions.get(port.node_id)
+    if current is None:
+        return
+    decisions[port.node_id] = replace(
+        current,
+        status=status,
+        stage=stage,
+        reason=reason,
     )
 
 
@@ -425,6 +808,8 @@ def _build_demo_trunk_edge(
         cost_yuan=total_cost,
         time_hours=profile.duration_hours,
         data_source=data_source,
+        transport_stage="north_to_south",
+        edge_role="trunk",
     )
     return TransportEdge(
         edge_id=edge_id,
@@ -451,6 +836,8 @@ def _build_demo_trunk_edge(
             f"演示运输时间={profile.duration_hours}小时"
         ),
         data_source=data_source,
+        transport_stage="north_to_south",
+        edge_role="trunk",
     )
 
 
@@ -513,7 +900,8 @@ def _build_real_trunk_edge(
         time_result,
         commodity=request.commodity,
         data_source="real_business_data:bulk_shipping_workbook",
-        transport_stage="bulk_shipping_trunk",
+        transport_stage="north_to_south",
+        edge_role="trunk",
         cost_components=tuple(cost_components),
     )
     if not edge.is_available:
@@ -543,7 +931,123 @@ def _load_optional_port_operation_fee_provider(
         raise FullFlowDemoError(f"南港码头作业费表无法安全加载：{exc}") from exc
 
 
-def _build_last_mile_edge(
+def _load_optional_inland_waterway_provider(
+    bundle: RealDataBundle,
+    registry: NodeRegistry,
+) -> tuple[InlandWaterwayBargeProvider | None, str | None]:
+    data_dir = bundle.data_dir
+    try:
+        freight_file = find_optional_inland_waterway_freight_file(data_dir)
+        time_file = find_optional_inland_waterway_time_file(data_dir)
+        if time_file is None:
+            return None, None
+        port_reference = load_port_reference_tables(data_dir, registry=registry)
+        region_mappings = (
+            *(
+                record
+                for record in port_reference.region_mappings
+                if record.region_code != "fujian_minjiang"
+            ),
+            *(
+                record
+                for record in DEFAULT_REGION_MAPPING_RECORDS
+                if record.region_code == "fujian_minjiang"
+            ),
+        )
+        derived_capabilities = ()
+        if bundle.node_master_entries:
+            derived_capabilities = (
+                build_barge_capabilities_from_node_master(
+                    node_master_entries=bundle.node_master_entries,
+                    freight_rates=bundle.freight_rates,
+                    registry=registry,
+                    region_mappings=region_mappings,
+                ).capabilities
+            )
+        capabilities = _merge_port_capabilities(
+            derived_capabilities,
+            port_reference.port_capabilities,
+            DEFAULT_PORT_CAPABILITY_RECORDS,
+        )
+        time_records = load_inland_waterway_time_records(time_file)
+        regional_fallback: InlandWaterwayBargeProvider | None = None
+        if freight_file is not None:
+            regional_fallback = TableInlandWaterwayBargeProvider(
+                port_capabilities=capabilities,
+                region_mappings=region_mappings,
+                freight_records=load_inland_waterway_freight_records(
+                    freight_file
+                ),
+                time_records=time_records,
+                allow_placeholder_capabilities=not bool(
+                    derived_capabilities
+                    or port_reference.port_capabilities
+                ),
+            )
+        exact_rate_count = sum(
+            "驳船" in rate.transport_mode for rate in bundle.freight_rates
+        )
+        if exact_rate_count:
+            exact_source_name = (
+                bundle.freight_rate_source.name
+                if bundle.freight_rate_source is not None
+                else "typed_freight_rates"
+            )
+            return (
+                ExactOdInlandWaterwayBargeProvider(
+                    port_capabilities=capabilities,
+                    exact_od_rates=bundle.freight_rates,
+                    time_records=time_records,
+                    fallback_provider=regional_fallback,
+                ),
+                (
+                    f"{exact_source_name}(exact_od={exact_rate_count})+{time_file}"
+                    + (
+                        f"+regional_fallback={freight_file}"
+                        if freight_file is not None
+                        else ""
+                    )
+                ),
+            )
+        if regional_fallback is None:
+            return None, None
+        return (
+            regional_fallback,
+            f"{freight_file}+{time_file}",
+        )
+    except (
+        InlandWaterwayFreightLoadError,
+        InlandWaterwayTimeLoadError,
+        NodeMasterCapabilityError,
+        PortReferenceLoadError,
+    ) as exc:
+        raise FullFlowDemoError(f"内河驳船数据无法安全加载：{exc}") from exc
+
+
+def _merge_port_capabilities(
+    *groups: Sequence[PortCapabilityRecord],
+) -> tuple[PortCapabilityRecord, ...]:
+    merged: list[PortCapabilityRecord] = []
+    occupied_node_ids: set[str] = set()
+    occupied_names: set[str] = set()
+    for group in groups:
+        for record in group:
+            normalized_name = "".join(record.canonical_name.split())
+            if (
+                record.node_id is not None
+                and record.node_id in occupied_node_ids
+            ):
+                continue
+            if normalized_name in occupied_names:
+                continue
+            merged.append(record)
+            if record.node_id is not None:
+                occupied_node_ids.add(record.node_id)
+            occupied_names.add(normalized_name)
+    return tuple(merged)
+
+
+def _build_customer_delivery_road_edge(
     port: TransferPort,
     destination_node_id: str,
     destination_name: str,
@@ -601,6 +1105,7 @@ def _build_last_mile_edge(
         transport_mode="汽运",
         input_value=str(road_result.duration_hours),
         input_unit="小时",
+        time_scope="road_driving",
     )
     edge = build_transport_edge(
         bound_rate,
@@ -610,6 +1115,8 @@ def _build_last_mile_edge(
         distance_km=road_result.distance_km,
         distance_source=road_result.source,
         data_source=data_source,
+        transport_stage="south_to_customer",
+        edge_role="delivery",
     )
     if not edge.is_available:
         raise FullFlowDemoError(f"候选节点 {port.name} 未形成可搜索运输边：{edge.unavailable_reason}")
@@ -617,14 +1124,25 @@ def _build_last_mile_edge(
 
 
 def print_full_flow_result(result: FullFlowDemoResult) -> None:
+    has_direct_customer_barge = any(
+        "驳船直达客户" in modes
+        for modes in result.south_to_customer_options_by_port.values()
+    )
     print("北港至客户工厂全链路运输路径推断原型")
-    print("第一版全流程领导 Demo")
+    print("第一第二阶段验收Demo")
     print("=" * 64)
-    print(f"输入：北港 A={result.origin_name}；客户工厂 B={result.destination_name}")
+    print(
+        f"输入：北港 A={result.origin_name}；客户工厂 B={result.destination_name}；"
+        f"南港={result.selected_south_port or '系统自动筛选'}"
+    )
     print(
         f"演示订单：{result.request.quantity}{result.request.quantity_unit}，"
         f"{result.request.package_type}，{result.request.commodity}，{result.request.trade_type}；"
-        "客户画像=无自有码头（演示默认）"
+        + (
+            "客户画像=真实精确 OD 运价证明本次客户节点可接收驳船"
+            if has_direct_customer_barge
+            else "客户画像=无自有码头（演示默认）"
+        )
     )
     print(
         f"坐标来源：北港={result.origin_resolution.source}；"
@@ -641,7 +1159,9 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
     candidate_count = len(result.candidate_ports)
     print(
         f"候选南港={candidate_count} 个；本次搜索图运输边={result.graph_edge_count} 条"
-        f"（真实散船干线边={result.trunk_edge_count} 条；南港至客户汽运边={candidate_count} 条）"
+        f"（真实散船干线边={result.trunk_edge_count} 条；"
+        f"汽运边={result.truck_edge_count} 条；"
+        f"内河驳船边={result.barge_edge_count} 条）"
     )
     print(
         f"AdditionalFee 原始记录={result.additional_fee_count} 条"
@@ -656,18 +1176,41 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
             f"明确不适用={result.port_operation_fee_not_applicable_count} 条"
             "（缺失或不匹配的候选不入图，不解释为 0）"
         )
-    print("候选南港（本次均已形成可搜索的南港至客户汽运段）：")
+    if result.inland_waterway_source is None:
+        print("内河驳船费率/航时表=未完整接入（当前不生成正式驳船边）")
+    else:
+        print(
+            f"内河驳船费率/航时表={result.inland_waterway_source}；"
+            f"已生成驳船边={result.barge_edge_count} 条；"
+            f"其中使用 demo_placeholder 能力标签="
+            f"{result.barge_placeholder_capability_count} 条"
+        )
+    print("候选南港（本次均已形成至少一种可搜索的南港后运输方案）：")
     for index, port in enumerate(result.candidate_ports, start=1):
+        modes = "、".join(
+            result.south_to_customer_options_by_port.get(port.node_id, ())
+        )
         print(
             f"  {index}. {port.name}；"
-            f"预筛直线距离={_format_decimal(port.straight_line_km_to_factory)}公里"
+            f"预筛直线距离={_format_decimal(port.straight_line_km_to_factory)}公里；"
+            f"已入图末段方式={modes or '无'}"
         )
     print(
-        "候选预筛口径（当前原型启发式）：候选来源于可用汽运运价始发端；"
-        "港/码头名称候选达到展示下限时优先保留，否则回退全部；"
-        "已维护到厂汽运路线优先，同优先级按直线距离排序；"
+        "候选预筛口径（当前原型启发式）：候选来源于适用当前订单的真实运价始发端；"
+        "优先采用节点维护表的节点性质、码头属性和包装能力；"
+        "维护标签缺失时才使用名称规则补充识别；"
+        "纯内河港和显式散粮能力排除仍优先阻断；"
+        "未分类港口可凭散粮始发运价证据准入；"
+        "已维护到厂汽运路线优先，并为存在适用精确 OD 驳船运价的南港"
+        "保留最多 3 个多式运输候选名额；同优先级按直线距离排序；"
         "最终汽运距离和时间使用腾讯道路结果，费用优先采用已维护运价，否则采用已确认陌生汽运规则。"
     )
+    print("候选准入决策（身份筛选、排序与构边结果）：")
+    for decision in result.candidate_decisions:
+        print(
+            f"  - {decision.name}；状态={decision.status}；阶段={decision.stage}；"
+            f"原因={decision.reason}"
+        )
 
     print("\n一、费用最低路线")
     _print_route(result.recommendations.lowest_cost, result)
@@ -683,10 +1226,21 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
             "费用最低与时间最短指向同一条物理路线；两项目标仍由系统独立搜索。"
         )
 
-    print("\n三、测试版数据边界说明")
-    print("- 真实输入与规则：本地标准节点、真实散船运价表、已维护汽运价可用时优先采用；道路距离和驾车时间来自腾讯地图；陌生汽运使用已确认规则。")
-    print("- 领导确认规则：北港至南港航运总时效按南港分区天数换算为小时，模型不拆分时间组成。")
-    print("- 演示占位数据：仅客户无自有码头画像。")
+    print("\n三、数据边界说明")
+    print(
+        "- 真实输入与规则：本地标准节点、真实散船运价表、"
+        "优先正式运费工作簿（缺失时回退 JSON）的最新无冲突精确 OD 驳船运价、"
+        "已维护汽运价可用时优先采用；"
+        "道路距离和驾车时间来自腾讯地图；陌生汽运使用已确认规则。"
+    )
+    print("- 北港至南港航运总时效按南港分区天数换算为小时，模型不拆分时间组成。")
+    if has_direct_customer_barge:
+        print(
+            "- 客户水运可达性：本次由真实精确 OD 驳船运价证明，"
+            #"不使用“无自有码头”演示占位。"
+        )
+    else:
+        print("- 演示占位数据：仅客户无自有码头画像。")
     print("- 暂未计入：AdditionalFee 仅完成原始记录加载；逐条适用条件未确认前不计入，也不解释为 0。")
     if result.port_operation_fee_source is None:
         print("- 暂未计入：南港码头作业费正式表未接入；当前不计入，也不解释为 0。")
@@ -696,6 +1250,26 @@ def print_full_flow_result(result: FullFlowDemoResult) -> None:
             "客户自有码头等明确不适用规则按 0 元通过且保留原因；"
             "精确费率缺失时可采用同区域最近适用真实码头费率，并明确标记 regional_proxy；"
             "仍无法解析区域或参考费率的候选南港不入图。"
+        )
+    if result.inland_waterway_source is None:
+        print("- 暂未接入：内河驳船费率/航时表不完整，本次不生成驳船边。")
+    elif result.barge_edge_count:
+        print(
+            "- 已接入：优先正式运费工作簿的最新无冲突精确 OD 驳船运价，"
+            "工作簿缺失时兼容回退 JSON；"
+            "独立区域费率仅在没有精确 OD 时回退；"
+            "符合区域、包装、品种、贸易类型和端点能力条件的驳船边可进入图；"
+            "福建闽江已确认费率为 50 元/吨、航运总时间为单程 15 小时，双向同时效。"
+        )
+        if result.barge_placeholder_capability_count:
+            print(
+                "- 演示占位：部分驳船边的端点装卸/通航能力仍使用 "
+                "demo_placeholder；费率和航时真实不等于端点能力已正式确认。"
+            )
+    else:
+        print(
+            "- 已接入接口：内河驳船费率和航时表已加载；本次输入未同时满足"
+            "区域、端点能力和订单适用条件，因此未生成驳船边。"
         )
     for warning in result.warnings:
         print(f"- 运行提示：{warning}")
@@ -708,6 +1282,13 @@ def _print_route(route: RouteResult, result: FullFlowDemoResult) -> None:
         f"总费用：{_format_decimal(route.total_cost_yuan)} 元；"
         f"总时间：{_format_decimal(route.total_time_hours)} 小时"
     )
+    cost_per_ton_wan = _cost_per_ton_wan(route.total_cost_yuan, result.request)
+    if cost_per_ton_wan is not None:
+        print(
+            "折合运价："
+            f"{_format_decimal(cost_per_ton_wan, places=4)} 万元/吨"
+            "（总费用÷订单吨数）"
+        )
     _print_cost_breakdown(route, result)
     for segment in route.segments:
         source = result.edge_sources[segment.edge_key]
@@ -784,6 +1365,7 @@ def _cost_component_type_text(component_type: str) -> str:
     return {
         "bulk_shipping_freight": "散船运费",
         "south_port_operation_fee": "码头作业费",
+        "barge_freight": "驳船运费",
     }.get(component_type, component_type)
 
 
@@ -798,6 +1380,14 @@ def _component_source_type_text(source_type: str) -> str:
 
 def _route_has_vessel_time_gap(route: RouteResult) -> bool:
     return any(segment.transport_mode in {"散船", "驳船"} for segment in route.segments)
+
+
+def _cost_per_ton_wan(total_cost_yuan: Decimal, request: RouteRequest) -> Decimal | None:
+    """Return the display-only total route cost in ten-thousand yuan per ton."""
+
+    if request.quantity_unit != "吨":
+        return None
+    return total_cost_yuan / request.quantity / Decimal("10000")
 
 
 def _format_decimal(value: Decimal, *, places: int = 2) -> str:
@@ -833,20 +1423,6 @@ def _point_from_resolution(result: CoordinateResolution) -> GeoPoint:
     if result.longitude is None or result.latitude is None:
         raise FullFlowDemoError(f"地点 {result.query_name} 缺少经纬度。")
     return GeoPoint(result.longitude, result.latitude)
-
-
-def _haversine_km(left: GeoPoint, right: GeoPoint) -> Decimal:
-    radius_km = 6371.0088
-    lat1 = math.radians(float(left.latitude))
-    lat2 = math.radians(float(right.latitude))
-    delta_lat = lat2 - lat1
-    delta_lon = math.radians(float(right.longitude - left.longitude))
-    value = (
-        math.sin(delta_lat / 2) ** 2
-        + math.cos(lat1) * math.cos(lat2) * math.sin(delta_lon / 2) ** 2
-    )
-    distance = 2 * radius_km * math.asin(math.sqrt(value))
-    return Decimal(str(round(distance, 3)))
 
 
 def _prompt_required(prompt: str, *, input_func: Callable[[str], str] = input) -> str:

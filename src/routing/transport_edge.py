@@ -15,8 +15,9 @@ try:
         CostComposition,
         ManualReviewOutcome,
         TimeScope,
+        TransportEdgeRole,
         TransportStage,
-        validate_stage_time_scope,
+        validate_transport_semantics,
     )
 except ImportError:  # Support direct script-style imports used by demo scripts.
     from src.domain.cost_rules import CostCalculationResult
@@ -27,8 +28,9 @@ except ImportError:  # Support direct script-style imports used by demo scripts.
         CostComposition,
         ManualReviewOutcome,
         TimeScope,
+        TransportEdgeRole,
         TransportStage,
-        validate_stage_time_scope,
+        validate_transport_semantics,
     )
 
 
@@ -63,6 +65,7 @@ class TransportEdge:
     data_source: str
     unavailable_reason: str | None = None
     transport_stage: TransportStage | None = None
+    edge_role: TransportEdgeRole | None = None
     time_scope: TimeScope | None = None
     cost_components: tuple[CostComponent, ...] = ()
     manual_review_outcomes: tuple[ManualReviewOutcome, ...] = ()
@@ -87,11 +90,16 @@ class TransportEdge:
         object.__setattr__(self, "data_source", _required_text(self.data_source, "运输边数据来源"))
         object.__setattr__(self, "unavailable_reason", _optional_text(self.unavailable_reason))
         object.__setattr__(self, "transport_stage", _optional_text(self.transport_stage))
+        object.__setattr__(self, "edge_role", _optional_text(self.edge_role))
         object.__setattr__(self, "time_scope", _optional_text(self.time_scope))
         object.__setattr__(self, "cost_components", tuple(self.cost_components))
         object.__setattr__(self, "manual_review_outcomes", tuple(self.manual_review_outcomes))
         try:
-            validate_stage_time_scope(self.transport_stage, self.time_scope)
+            validate_transport_semantics(
+                self.transport_stage,
+                self.edge_role,
+                self.time_scope,
+            )
         except ValueError as exc:
             raise TransportEdgeError(str(exc)) from None
 
@@ -182,6 +190,7 @@ class TransportEdge:
             "calculation_detail": self.calculation_detail,
             "data_source": self.data_source,
             "transport_stage": self.transport_stage,
+            "edge_role": self.edge_role,
             "time_scope": self.time_scope,
             "cost_components": self.cost_components,
         }
@@ -197,6 +206,7 @@ def build_transport_edge(
     distance_source: str | None = None,
     data_source: str | None = None,
     transport_stage: TransportStage | None = None,
+    edge_role: TransportEdgeRole | None = None,
     cost_components: tuple[CostComponent, ...] = (),
     manual_review_outcomes: tuple[ManualReviewOutcome, ...] = (),
 ) -> TransportEdge:
@@ -286,6 +296,7 @@ def build_transport_edge(
         distance_source=normalized_distance_source,
         data_source=source,
         transport_stage=transport_stage,
+        edge_role=edge_role,
         time_scope=time_result.time_scope,
         cost_components=tuple(
             (
@@ -332,6 +343,7 @@ def build_transport_edge(
         data_source=source,
         unavailable_reason=unavailable_reason,
         transport_stage=transport_stage,
+        edge_role=edge_role,
         time_scope=time_result.time_scope,
         cost_components=cost_components,
         manual_review_outcomes=manual_review_outcomes,

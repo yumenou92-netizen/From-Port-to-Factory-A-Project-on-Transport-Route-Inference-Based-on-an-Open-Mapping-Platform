@@ -1,6 +1,8 @@
 key,value,required,note
 DATA_DIR,.\data_REAL,true,真实数据目录；真实路径只写入 local_env/runtime_env.csv。
+FREIGHT_WORKBOOK_PATH,,false,可选：显式指定本次运行使用的运费数据 .xlsx；空值时读取 DATA_DIR 下的运费数据.xlsx。
 TENCENT_MAP_API_KEY,,false,腾讯地图 API Key；不要提交真实 Key。
+TENCENT_MAP_JS_KEY,,false,可选的腾讯 JavaScript API GL 专用 Key；仅写入本地 runtime_env.csv，不要提交真实 Key。
 REAL_DATA_DEMO_MANUAL_TIME_HOURS,24,false,真实数据图搜索 smoke 的本地演示人工时间。
 REAL_DATA_DEMO_MANUAL_TIME_UNIT,小时,false,REAL_DATA_DEMO_MANUAL_TIME_HOURS 的时间单位。
 PYTHONPATH,.\.python_packages,false,当前 Windows 检出使用的本地依赖目录。

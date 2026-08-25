@@ -38,6 +38,7 @@ from src.domain.route_request import PACKAGING_QUANTITY_UNITS, RouteRequest
 ENV_KEYS_TO_REPORT = (
     "DATA_DIR",
     "TENCENT_MAP_API_KEY",
+    "TENCENT_MAP_JS_KEY",
     "REAL_DATA_DEMO_MANUAL_TIME_HOURS",
     "REAL_DATA_DEMO_MANUAL_TIME_UNIT",
     "SMOKE_RUN_REAL_DATA",
@@ -283,10 +284,13 @@ def show_formal_route_demo() -> None:
 def show_leader_full_flow_contract() -> None:
     print_header("5. Leader Full-Flow Demo Contract")
     print("Command: python -B -m src.demos.leader full-flow")
-    print("Input: north port A and customer factory B")
+    print("Input: north port A, customer factory B, optional registered south port, and RouteRequest")
     print("Output: lowest-cost and fastest-time route recommendations")
-    print("Real-first sources: local nodes, maintained rates, Tencent road route, confirmed rules")
-    print("Demo-only fallback: north-port-to-south-port shipping cost/time and customer profile")
+    print("Real-first sources: local nodes, bulk/barge rates, shipping times, operation fees, Tencent road route")
+    print("Parallel last mile: truck and eligible barge edges remain distinct in MultiDiGraph")
+    print("Traceable proxy: nearest same-region operation fee never claims target-port exact data")
+    print("Demo-only fallback: customer profile and explicitly disclosed barge endpoint capability")
+    print("Local UI: python -X utf8 -B -m src.web.server --host 127.0.0.1 --port 8765")
     print("Excluded pending confirmation: AdditionalFee")
 
 

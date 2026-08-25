@@ -10,6 +10,7 @@ def test_load_port_reference_tables_reads_capabilities_and_region_mappings(tmp_p
             "region_code",
             "infrastructure_type",
             "can_receive_bulk_shipping",
+            "is_transfer_port",
             "can_handle_barge",
             "supported_package_types",
             "supported_commodities",
@@ -23,6 +24,7 @@ def test_load_port_reference_tables_reads_capabilities_and_region_mappings(tmp_p
                 "fujian_meizhou_bay",
                 "seaport",
                 "是",
+                "否",
                 "否",
                 "散粮",
                 "玉米；小麦",
@@ -63,6 +65,8 @@ def test_load_port_reference_tables_reads_capabilities_and_region_mappings(tmp_p
     assert capability.node_id == "node-xiuyu"
     assert capability.canonical_name == "秀屿港"
     assert capability.can_receive_bulk_shipping
+    assert capability.is_transfer_port is False
+    assert not capability.transfer_port_role_confirmed
     assert not capability.can_handle_barge
     assert capability.supported_package_types == ("散粮",)
     assert capability.supported_commodities == ("玉米", "小麦")
@@ -83,6 +87,24 @@ def test_missing_port_reference_tables_are_auditable_not_fatal(tmp_path):
     assert len(tables.warnings) == 2
 
 
+def test_header_only_port_reference_tables_warn_without_guessing_records(tmp_path):
+    (tmp_path / "港口能力表.csv").write_text(
+        "canonical_name,infrastructure_type,source\n",
+        encoding="utf-8-sig",
+    )
+    (tmp_path / "区域映射表.csv").write_text(
+        "region_code,region_name,city_keywords,port_keywords,source\n",
+        encoding="utf-8-sig",
+    )
+
+    tables = load_port_reference_tables(tmp_path)
+
+    assert tables.port_capabilities == ()
+    assert tables.region_mappings == ()
+    assert any("港口能力表.csv 已存在但没有有效数据行" in item for item in tables.warnings)
+    assert any("区域映射表.csv 已存在但没有有效数据行" in item for item in tables.warnings)
+
+
 def test_port_capability_loader_preserves_unknown_values_instead_of_false(tmp_path):
     write_csv(
         tmp_path / "港口能力表.csv",
@@ -92,6 +114,7 @@ def test_port_capability_loader_preserves_unknown_values_instead_of_false(tmp_pa
             "region_code",
             "infrastructure_type",
             "can_receive_bulk_shipping",
+            "is_transfer_port",
             "can_handle_barge",
             "supported_package_types",
             "supported_commodities",
@@ -115,6 +138,7 @@ def test_port_capability_loader_preserves_unknown_values_instead_of_false(tmp_pa
                 "",
                 "",
                 "",
+                "",
                 "manual_review",
                 "",
                 "pending_manual_review",
@@ -125,6 +149,7 @@ def test_port_capability_loader_preserves_unknown_values_instead_of_false(tmp_pa
     record = load_port_reference_tables(tmp_path).port_capabilities[0]
 
     assert record.can_receive_bulk_shipping is None
+    assert record.is_transfer_port is None
     assert record.can_handle_barge is None
     assert record.supported_package_types is None
     assert record.supported_commodities is None

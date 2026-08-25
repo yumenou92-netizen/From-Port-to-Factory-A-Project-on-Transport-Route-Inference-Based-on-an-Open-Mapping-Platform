@@ -63,6 +63,11 @@ def load_port_reference_tables(
         capabilities: tuple[PortCapabilityRecord, ...] = ()
     else:
         capabilities = tuple(load_port_capability_records(capability_file, registry=registry))
+        if not capabilities:
+            warnings.append(
+                f"{PORT_CAPABILITY_FILE_NAME} 已存在但没有有效数据行；"
+                "缺失能力仍不生成对应运输边。"
+            )
 
     if region_mapping_file is None:
         warnings.append(f"{PORT_REGION_MAPPING_FILE_NAME} 未接入；未映射港口进入人工复核。")
@@ -73,6 +78,11 @@ def load_port_reference_tables(
         operation_fee_assignments = tuple(
             load_operation_fee_region_assignments(region_mapping_file)
         )
+        if not mappings:
+            warnings.append(
+                f"{PORT_REGION_MAPPING_FILE_NAME} 已存在但没有有效数据行；"
+                "未映射港口仍进入人工复核。"
+            )
 
     return PortReferenceTables(
         data_dir=root,
@@ -132,6 +142,12 @@ def load_port_capability_records(
                     path,
                     row_no,
                     "can_receive_bulk_shipping",
+                ),
+                is_transfer_port=parse_optional_bool(
+                    read_field(row, row_no, "is_transfer_port", required=False),
+                    path,
+                    row_no,
+                    "is_transfer_port",
                 ),
                 supported_transport_modes=split_optional_text_list(
                     read_field(row, row_no, "supported_transport_modes", required=False)
@@ -273,6 +289,7 @@ FIELD_ALIASES = {
     "aliases": ("aliases", "别名", "别名列表"),
     "infrastructure_type": ("infrastructure_type", "基础设施类型", "节点类型"),
     "can_receive_bulk_shipping": ("can_receive_bulk_shipping", "可接收北港散船", "可接收散船干线"),
+    "is_transfer_port": ("is_transfer_port", "是否中转港", "中转港"),
     "supported_transport_modes": ("supported_transport_modes", "支持运输方式", "运输方式"),
     "city": ("city", "城市", "市域"),
     "shipping_time_region": ("shipping_time_region", "航运时效区", "纯航行时效分区"),

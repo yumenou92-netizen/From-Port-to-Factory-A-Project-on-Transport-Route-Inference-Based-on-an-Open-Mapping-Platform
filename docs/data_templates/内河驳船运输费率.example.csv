@@ -1,0 +1,2 @@
+origin_region_code,destination_region_code,package_type,commodity_scope,unit_price,fee_unit,trade_type,bidirectional,source_type,source,rule_id,rule_version,maintained_at
+example_region_a,example_region_b,散粮,*,50,元/吨,内贸,是,real_data,demo_template,example_bulk_barge_freight,1.0,2026-07-28

@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 from decimal import Decimal, InvalidOperation
 from math import asin, cos, radians, sin, sqrt
 from typing import Any, Callable, Mapping
+from urllib.parse import urlparse
 
 try:
     from .coordinate_provider import (
@@ -388,8 +389,19 @@ def _requests_get_json(url: str, params: Mapping[str, Any], timeout_seconds: flo
     except ImportError as exc:
         raise TencentMapConfigError("Python package requests is required for Tencent Maps API calls.") from exc
 
+    session = None
+    request_get = requests.get
+    if _has_loopback_proxy_configuration():
+        # A stopped local proxy (for example 127.0.0.1:7897) makes an otherwise
+        # valid Tencent request fail with ConnectionError.  Tencent is directly
+        # reachable in the supported local runtime, so bypass only loopback
+        # proxy settings; non-local corporate proxies retain their normal path.
+        session = requests.Session()
+        session.trust_env = False
+        request_get = session.get
+
     try:
-        response = requests.get(url, params=params, timeout=timeout_seconds)
+        response = request_get(url, params=params, timeout=timeout_seconds)
         response.raise_for_status()
         payload = response.json()
     except requests.RequestException as exc:
@@ -402,6 +414,19 @@ def _requests_get_json(url: str, params: Mapping[str, Any], timeout_seconds: flo
     if not isinstance(payload, Mapping):
         raise TencentMapHttpError(f"HTTP response from {url} is not a JSON object")
     return payload
+
+
+def _has_loopback_proxy_configuration() -> bool:
+    """Return whether ambient proxy variables point to a local proxy process."""
+
+    for key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        raw_value = os.environ.get(key, "").strip()
+        if not raw_value:
+            continue
+        hostname = urlparse(raw_value).hostname
+        if hostname and hostname.lower() in {"127.0.0.1", "localhost", "::1"}:
+            return True
+    return False
 
 
 def _safe_request_error_detail(exc: Exception) -> str:
@@ -767,6 +792,7 @@ def _route_result_from_payload(
         raw_duration_minutes=duration_minutes,
         toll_yuan=toll_yuan,
         route_tags=_parse_route_tags(route),
+        polyline_points=_parse_polyline_points(route),
     )
 
 
@@ -785,6 +811,29 @@ def _parse_route_tags(route: Mapping[str, Any]) -> tuple[str, ...]:
     if not isinstance(tags, list):
         return ()
     return tuple(str(tag).strip() for tag in tags if str(tag).strip())
+
+
+def _parse_polyline_points(route: Mapping[str, Any]) -> tuple[GeoPoint, ...]:
+    polyline = route.get("polyline")
+    if not isinstance(polyline, list) or len(polyline) < 4 or len(polyline) % 2 != 0:
+        return ()
+
+    try:
+        latitude = _to_decimal(polyline[0], "polyline[0]")
+        longitude = _to_decimal(polyline[1], "polyline[1]")
+        points = [GeoPoint(longitude=longitude, latitude=latitude)]
+
+        for index in range(2, len(polyline), 2):
+            latitude += _to_decimal(polyline[index], f"polyline[{index}]") / Decimal("1000000")
+            longitude += (
+                _to_decimal(polyline[index + 1], f"polyline[{index + 1}]")
+                / Decimal("1000000")
+            )
+            points.append(GeoPoint(longitude=longitude, latitude=latitude))
+    except (TencentMapProviderError, ValueError, ArithmeticError):
+        return ()
+
+    return tuple(points)
 
 
 def _positive_int(value: object, field_name: str) -> int:

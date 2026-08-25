@@ -1,10 +1,15 @@
 import json
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
+from openpyxl import Workbook
 
 from src.data.loaders import (
     DataLoadError,
+    NodeRecord,
+    _looks_like_customer_facility,
+    _match_master_port_to_rate_names,
     build_review_rows,
     build_order_edge_candidates,
     build_order_edge_candidates_for_request,
@@ -13,6 +18,8 @@ from src.data.loaders import (
     load_real_data_bundle,
     make_node_id,
 )
+from src.data.node_master_maintenance import NODE_MASTER_HEADERS
+from src.domain.node_registry import build_node_registry
 from src.domain.route_request import RouteRequest
 
 
@@ -35,6 +42,72 @@ def test_load_real_data_bundle_reads_required_business_json_files(tmp_path):
     assert bundle.freight_rates[0].from_node_id == make_node_id("北港A")
     assert bundle.freight_rates[0].to_node_id == make_node_id("南港B")
     assert bundle.nodes[0].node_id == make_node_id("北港A")
+    assert bundle.freight_rate_source.name == "运价表.json"
+
+
+def test_load_real_data_bundle_prefers_freight_workbook_and_preserves_row_source(
+    tmp_path,
+):
+    data_dir = write_real_data_fixture(tmp_path)
+    workbook_rows = base_rate_rows()
+    workbook_rows[0]["适用品种"] = "小麦"
+    workbook_rows[0]["费用"] = 18.38
+    workbook_rows[1]["适用品种"] = "玉米、大豆"
+    workbook_rows[1]["费用"] = 17.9
+    workbook_rows[1]["费用单位"] = "元/吨"
+    write_freight_workbook(data_dir / "运费数据.xlsx", workbook_rows)
+
+    bundle = load_real_data_bundle(data_dir)
+
+    assert bundle.freight_rate_source.name == "运费数据.xlsx"
+    assert len(bundle.freight_rates) == 2
+    assert [rate.commodity_scope for rate in bundle.freight_rates] == [
+        "小麦",
+        "玉米、大豆",
+    ]
+    assert [rate.raw_price for rate in bundle.freight_rates] == [
+        Decimal("18.38"),
+        Decimal("17.9"),
+    ]
+    assert all(
+        rate.source_file == "运费数据.xlsx"
+        for rate in bundle.freight_rates
+    )
+    assert [rate.source_row_number for rate in bundle.freight_rates] == [2, 3]
+    assert all(rate.is_node_resolved for rate in bundle.freight_rates)
+
+
+def test_load_real_data_bundle_uses_explicit_freight_workbook_override(
+    tmp_path,
+    monkeypatch,
+):
+    data_dir = write_real_data_fixture(tmp_path)
+    maintained_workbook = data_dir / "运费数据_领导确认修订.xlsx"
+    workbook_rows = base_rate_rows()
+    workbook_rows[0]["始发"] = "修订南港"
+    write_freight_workbook(maintained_workbook, workbook_rows)
+    monkeypatch.setenv("FREIGHT_WORKBOOK_PATH", str(maintained_workbook))
+
+    bundle = load_real_data_bundle(data_dir)
+
+    assert bundle.freight_rate_source == maintained_workbook
+    assert bundle.freight_rates[0].origin_name == "修订南港"
+    assert bundle.freight_rates[0].source_file == maintained_workbook.name
+
+
+def test_invalid_preferred_freight_workbook_does_not_silently_fallback_json(
+    tmp_path,
+):
+    data_dir = write_real_data_fixture(tmp_path)
+    workbook = Workbook()
+    workbook.active.title = "错误工作表"
+    workbook.save(data_dir / "运费数据.xlsx")
+
+    with pytest.raises(
+        DataLoadError,
+        match="优先正式运费工作簿无法安全加载.*缺少工作表",
+    ):
+        load_real_data_bundle(data_dir)
 
 
 def test_build_order_edge_candidates_converts_only_matching_units(tmp_path):
@@ -378,6 +451,77 @@ def test_load_real_data_bundle_binds_station_alias_to_canonical_node(tmp_path):
     assert bundle.freight_rates[0].to_node_id == make_node_id("南港B")
 
 
+def test_0731_node_master_precedes_old_coordinates_and_registers_alias(tmp_path):
+    data_dir = write_real_data_fixture(tmp_path)
+    rows = base_rate_rows()
+    rows[0]["到达"] = "南港B别名"
+    write_json_lines(data_dir / "运价表.json", rows[:1])
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "节点信息维护"
+    sheet.append(NODE_MASTER_HEADERS)
+    sheet.append(
+        (
+            "物流节点",
+            "港口码头",
+            "海港、内河码头",
+            "散粮",
+            "2000",
+            "",
+            "南港B",
+            "南港B别名",
+            "24",
+            "/",
+            "广东省",
+            "广州市",
+            "黄埔区",
+            "",
+            "港前路",
+            113.5,
+            23.0,
+        )
+    )
+    workbook.save(data_dir / "节点信息维护0731.xlsx")
+
+    bundle = load_real_data_bundle(data_dir)
+
+    node = bundle.node_registry.require("南港B别名")
+    assert node.canonical_name == "南港B"
+    assert node.longitude == 113.5
+    assert node.latitude == 23.0
+    assert bundle.freight_rates[0].to_node_id == node.node_id
+    assert len(bundle.node_master_entries) == 1
+    assert bundle.node_master_entries[0].aliases == ("南港B别名",)
+
+
+def test_customer_marker_precedes_incidental_port_text_during_alias_inference():
+    assert _looks_like_customer_facility("测试港口物流有限公司码头")
+
+
+def test_nearby_coordinates_alone_do_not_create_port_alias():
+    registry = build_node_registry(
+        [NodeRecord("node-raw", "另一座码头", 113.5, 23.0)]
+    )
+    entry = SimpleNamespace(
+        is_logistics_node=True,
+        is_port_facility=True,
+        full_name="测试港",
+        aliases=(),
+        all_names=("测试港",),
+        longitude=113.5,
+        latitude=23.0,
+    )
+
+    aliases = _match_master_port_to_rate_names(
+        entry=entry,
+        rate_location_names={"另一座码头"},
+        registry=registry,
+        authoritative_name_owner={},
+    )
+
+    assert aliases == ()
+
+
 def write_real_data_fixture(tmp_path):
     write_json_lines(tmp_path / "运价表.json", base_rate_rows())
     write_json_lines(
@@ -434,3 +578,24 @@ def write_json_lines(path, rows):
         "\n".join(json.dumps(row, ensure_ascii=False) for row in rows),
         encoding="utf-8",
     )
+
+
+def write_freight_workbook(path, rows):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "运价表"
+    headers = [
+        "始发",
+        "到达",
+        "运输方式",
+        "包装方式",
+        "适用品种",
+        "费用",
+        "费用单位",
+        "价格来源",
+        "维护日期",
+    ]
+    sheet.append(headers)
+    for row in rows:
+        sheet.append([row.get(header) for header in headers])
+    workbook.save(path)

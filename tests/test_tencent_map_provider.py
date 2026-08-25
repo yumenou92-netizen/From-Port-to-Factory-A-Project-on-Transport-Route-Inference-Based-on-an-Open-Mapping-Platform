@@ -14,6 +14,7 @@ from src.geo.tencent_map_provider import (
     TencentMapCoordinateProvider,
     TencentMapDrivingRouteProvider,
     TencentMapHttpError,
+    _requests_get_json,
     make_geo_point,
 )
 
@@ -273,6 +274,14 @@ def test_tencent_driving_route_provider_converts_meters_minutes_to_km_hours():
                         "distance": 12345,
                         "duration": 90,
                         "toll": 12.5,
+                        "polyline": [
+                            23.1,
+                            113.2,
+                            100000,
+                            -200000,
+                            -50000,
+                            300000,
+                        ],
                         "tags": ["距离短", "收费少"],
                     }
                 ]
@@ -295,6 +304,11 @@ def test_tencent_driving_route_provider_converts_meters_minutes_to_km_hours():
     assert result.raw_distance_meters == 12345
     assert result.raw_duration_minutes == 90
     assert result.toll_yuan == Decimal("12.5")
+    assert result.polyline_points == (
+        GeoPoint(longitude="113.2", latitude="23.1"),
+        GeoPoint(longitude="113.0", latitude="23.2"),
+        GeoPoint(longitude="113.3", latitude="23.15"),
+    )
     assert result.route_tags == ("距离短", "收费少")
     assert seen["from"] == "23.1,113.2"
     assert seen["to"] == "24.2,114.3"
@@ -303,6 +317,51 @@ def test_tencent_driving_route_provider_converts_meters_minutes_to_km_hours():
     assert seen["get_speed"] == 0
     assert seen["plate_number"] == "粤A12345"
     assert seen["cartype"] == 0
+
+
+@pytest.mark.parametrize(
+    "route_extra",
+    [
+        {},
+        {"polyline": [23.1, 113.2]},
+        {"polyline": [23.1, 113.2, 100000]},
+        {"polyline": [23.1, "invalid"]},
+    ],
+    ids=["missing", "single-point", "odd-length", "non-numeric"],
+)
+def test_tencent_driving_route_provider_keeps_valid_metrics_when_polyline_is_unusable(
+    route_extra,
+):
+    def fake_get_json(url, params, timeout_seconds):
+        return {
+            "status": 0,
+            "message": "query ok",
+            "result": {
+                "routes": [
+                    {
+                        "mode": "DRIVING",
+                        "distance": 12345,
+                        "duration": 90,
+                        **route_extra,
+                    }
+                ]
+            },
+        }
+
+    client = TencentMapClient("fake-secret", get_json=fake_get_json)
+    provider = TencentMapDrivingRouteProvider(client)
+
+    result = provider.get_route(
+        RoadRouteRequest(
+            origin=GeoPoint(longitude="113.2", latitude="23.1"),
+            destination=GeoPoint(longitude="114.3", latitude="24.2"),
+        )
+    )
+
+    assert result.is_resolved
+    assert result.distance_km == Decimal("12.345")
+    assert result.duration_hours == Decimal("1.5")
+    assert result.polyline_points == ()
 
 
 def test_tencent_driving_route_provider_returns_manual_review_on_api_error():
@@ -336,6 +395,8 @@ def test_tencent_client_from_env_requires_api_key(monkeypatch):
 
 def test_tencent_client_http_error_detail_does_not_leak_key(monkeypatch):
     requests = pytest.importorskip("requests")
+    for proxy_key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(proxy_key, raising=False)
 
     class FakeResponse:
         status_code = 403
@@ -367,3 +428,35 @@ def test_tencent_client_http_error_detail_does_not_leak_key(monkeypatch):
     assert "status_code=403" in message
     assert "Forbidden" in message
     assert "fake-secret" not in message
+
+
+def test_tencent_http_bypasses_only_loopback_proxy(monkeypatch):
+    requests = pytest.importorskip("requests")
+    for proxy_key in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        monkeypatch.delenv(proxy_key, raising=False)
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7897")
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"status": 0, "data": []}
+
+    class FakeSession:
+        trust_env = True
+
+        def get(self, url, params, timeout):
+            assert self.trust_env is False
+            assert url == PLACE_SEARCH_URL
+            assert params == {"keyword": "北良港"}
+            assert timeout == 3
+            return FakeResponse()
+
+    fake_session = FakeSession()
+    monkeypatch.setattr(requests, "Session", lambda: fake_session)
+
+    assert _requests_get_json(PLACE_SEARCH_URL, {"keyword": "北良港"}, 3) == {
+        "status": 0,
+        "data": [],
+    }

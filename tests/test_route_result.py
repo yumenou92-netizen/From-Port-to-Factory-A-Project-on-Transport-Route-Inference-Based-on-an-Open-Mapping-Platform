@@ -103,6 +103,35 @@ def test_route_segments_preserve_edge_keys_and_trace_fields():
     assert first.data_source == "sanitized_rates.json#edge-road-a-b"
 
 
+def test_route_segments_preserve_transport_semantics_and_time_scope():
+    edge = replace(
+        make_edge("edge-road-a-b", "node-a", "node-b", "10", "10"),
+        transport_stage="south_to_customer",
+        edge_role="delivery",
+        time_scope="road_driving",
+    )
+    graph = build_transport_multidigraph(
+        [edge],
+        allow_unregistered_nodes=True,
+    ).graph
+    search = NetworkXDijkstraRouteSearchStrategy().search(
+        graph,
+        "node-a",
+        "node-b",
+        objective="cost",
+    )
+
+    result = build_route_result(graph, search)
+    rows = route_result_to_rows(result)
+
+    assert result.segments[0].transport_stage == "south_to_customer"
+    assert result.segments[0].edge_role == "delivery"
+    assert result.segments[0].time_scope == "road_driving"
+    assert rows[0]["transport_stage"] == "south_to_customer"
+    assert rows[0]["edge_role"] == "delivery"
+    assert rows[0]["time_scope"] == "road_driving"
+
+
 def test_route_result_rows_include_segment_and_route_totals():
     graph = make_choice_graph()
     search = NetworkXDijkstraRouteSearchStrategy().search(

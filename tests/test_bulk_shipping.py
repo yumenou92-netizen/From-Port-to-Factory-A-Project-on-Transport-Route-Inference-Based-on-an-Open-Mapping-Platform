@@ -90,6 +90,8 @@ def test_destination_classifier_uses_confirmed_business_groups():
     assert classify_bulk_shipping_destination("秀屿港") == ("秀屿", "福建")
     assert classify_bulk_shipping_destination("揭阳港") == ("揭阳", "珠三角")
     assert classify_bulk_shipping_destination("阳江港") == ("茂名/阳江", "粤西")
+    assert classify_bulk_shipping_destination("军航码头") == ("马尾", "福建")
+    assert classify_bulk_shipping_destination("洋浦港") == ("马村/海口", "海南")
     assert classify_bulk_shipping_destination("钟山站") == (None, None)
 
 

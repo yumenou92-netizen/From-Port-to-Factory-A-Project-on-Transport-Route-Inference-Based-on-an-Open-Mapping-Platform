@@ -159,7 +159,7 @@ BULK_SHIPPING_MANUAL_VALIDATION_RULE = CostRuleConfig(
     rule_type="manual_quote_validation",
     enabled=True,
 )
-
+'''计价系数为0.7、0.6及0.5、0.3，若需要维护请修改此处'''
 UNKNOWN_TRUCK_BULK_RULE = CostRuleConfig(
     rule_id="unknown_truck_bulk_distance_tier",
     rule_version="draft-2",
@@ -298,11 +298,12 @@ class CostRuleEngine:
         distance_source: str | None = None,
         price_source: str = "最后一公里汽运规则",
     ) -> CostCalculationResult:
-        """Evaluate last-mile truck cost under the current business boundary.
+        """评估当前业务边界内的“最后一公里”卡车运输成本。
 
-        Known truck routes use maintained freight rates. Unknown bulk truck
-        routes may calculate only from an externally confirmed road distance;
-        this domain layer never calls map APIs or guesses missing distance.
+         已知的货车路线采用固定的运费率。
+        路线仅可根据外部确认的道路距离进行计算；
+        该域层绝不会调用地图 API 或推测缺失的距离。
+        调用API的部分已经独立隔离到GEO层
         """
         if known_rate is not None:
             rule = self.require_enabled(KNOWN_TRUCK_MAINTAINED_RATE_RULE.rule_id)

@@ -2,6 +2,178 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-08-12
+
+### Changed
+
+- Added the confirmed same-latest-date source priority to the shared freight
+  selector: a unique `成交` rate now precedes conflicting `询价` rates, while
+  multiple different transaction rates and all other source conflicts remain
+  `manual_review`.
+- Kept the rule source-text scoped and auditable; it does not alter raw
+  workbook rows or silently select a lowest price.
+- Added optional local `FREIGHT_WORKBOOK_PATH` configuration.  When set, the
+  loader consumes only that explicitly named `.xlsx` freight workbook; when
+  absent, the prior `DATA_DIR/运费数据.xlsx` discovery behaviour is unchanged.
+- Restored the confirmed display-only `万元/吨` conversion for route unit cost;
+  it remains outside edge costs, candidate selection, and both Dijkstra goals.
+
+### Verification
+
+- Added selector regressions for inquiry-versus-transaction selection and for
+  the remaining multiple-transaction conflict boundary.
+- Added a loader regression for the explicit local freight-workbook override.
+
+## 2026-08-06
+
+### Changed
+
+- The leadership CLI now shows each resolved ton-based route's derived `折合运价` in `万元/吨` (`total cost in yuan / order tons / 10,000`). This is presentation-only, keeps four decimal places to avoid rounding a usable value to zero, and does not affect candidate selection, edge costs, or either Dijkstra search.
+- Added a strict `集装箱船运价时效.csv` contract for future north-to-south container-vessel rates and complete-segment times. It accepts only `集装箱/箱`, preserves exact OD, commodity, trade type, price type and source trace, and rejects any implicit `柜` conversion.
+- Added a standalone container-vessel Provider boundary. It can create a formal `north_to_south/trunk` `TransportEdge` once confirmed source records exist, but has no fallback to bulk shipping, bulk barge, rail or truck rules.
+- Added a read-only container-trunk admission audit and CLI. It uses maintained node tags to distinguish sea/sea-river container ports from pure inland ports and customer/non-port nodes; it does not call Tencent, write real data, or alter the existing bulk full-flow.
+- Added a sanitized CSV template and maintenance documentation for the future container-vessel source.
+
+### Verification
+
+- Container contract, provider, node-master and freight-rate focused suites passed: `24 passed in 0.47s`.
+- The real-data read-only audit found no connected `集装箱船运价时效.csv` source, zero loaded container-vessel records, and 28 sea or sea-river container-capable south-port candidates pending formal rate/time data. No container graph edge was generated.
+- The required developer smoke passed: `468 passed in 4.37s`; real-data smoke passed with 492 freight rates, 972 standard nodes, 302 graph-ready candidates for its representative bulk order, and zero missing node IDs. The restricted Tencent probe returned `manual_review` on `ConnectionError` rather than claiming live API success.
+
+## 2026-07-31
+
+### Changed
+
+- Added a strict Web-only loader for `航线控制点_全点版.json`. The current local GCJ-02 dataset exposes five corridors and 298 control points; invalid coordinate systems, duplicated route IDs, malformed points, or unknown route-mode mappings fail explicitly.
+- Bulk-shipping and barge map segments now connect each actual endpoint to its nearest point in one applicable connected control-point network, then follow the maintained corridor subpath. The serialized geometry preserves source schema, route IDs, and endpoint connector distances.
+- Kept route-control geometry outside `TransportEdge`, graph construction, cost/time calculation, candidate selection, and Dijkstra. Missing optional control-point data retains the earlier explicit schematic fallback; Tencent truck geometry remains the same measured-route polyline.
+- Added a strict `运费数据.xlsx/运价表` adapter and made it the preferred formal freight source. The legacy `运价表.json` remains a compatibility fallback only when the workbook is absent; an invalid present workbook fails closed instead of silently reverting to stale JSON.
+- South-port identity screening now treats maintained node tags as primary evidence. `节点信息维护0731.xlsx` is authoritative when present, while `码头信息维护0729版.xlsx` supplies the compatible port-nature fallback; name heuristics are used only when maintained identity tags are unavailable. Port identity requires maintained `节点性质=港口码头`; waterway attributes alone no longer promote a warehouse or company node to a south port.
+- Preserved workbook row numbers in every `FreightRate` source trace. Commodity-specific wheat versus corn/soybean records now form distinct business keys, reducing the former ten same-day exact-OD barge conflicts to zero.
+- Added two bounded, traceable rate-evidence capability overrides for endpoints absent from `节点信息维护0731.xlsx`: `东莞粤储粮港务有限公司/东莞粤储粮` as a Pearl River Delta sea-river origin and `南宁港牛湾作业区` as a Nanning inland transfer destination. The override applies only to the package and commodity scopes evidenced by exact OD records and does not generalize port identity.
+- Added a strict adapter for `节点信息维护0731.xlsx`. It validates the maintained worksheet schema, ignores alias placeholders `24` and `/`, prefers the latest coordinates, preserves source rows, and collapses duplicate names without merging separately named port facilities.
+- Added source-backed barge capability construction. An exact barge OD record proves only the two endpoints' ability to handle that record's package/commodity scope; customer endpoints remain customer nodes, transfer ports require an inland-waterway logistics role, and south ports still require sea access.
+- Added traceable inland-waterway region assignment for exact barge endpoints. Maintained mappings are preferred; the remaining endpoints may use the nearest already mapped region anchor, retaining the anchor node and distance rather than presenting the proxy as an exact mapping.
+- Added `ExactOdInlandWaterwayBargeProvider`. Applicable latest exact OD rates from the typed formal freight source now take precedence over the independent regional freight table, calculate total freight as unit rate times order quantity, and combine with the maintained complete-segment inland-waterway time. Regional freight is used only when no exact OD exists.
+- Kept same-day, same-scope conflicting exact OD quotations in `manual_review`; an exact conflict is never hidden by a regional fallback. The former ten groups are no longer conflicts after the maintained workbook split their commodity scopes.
+- Extended south-port selection with a small multimodal quota so nearest direct-truck candidates remain available while exact-OD barge origins can also enter the candidate set. For each selected south port, full-flow expands at most the three transfer ports nearest to the customer; the limit is a current search-width policy, not a business connectivity rule.
+- Allowed a customer node to be an exact-OD barge receiver without reclassifying it as a port or transfer port. Customer/factory/logistics roles remain properties of one registered node for current routing; no database migration was introduced.
+
+### Verification
+
+- Route-control-point loading, nearest-corridor selection, bulk/barge geometry, Web serialization, and frontend contract tests passed with `19 passed in 0.41s`. The real local file loaded as five routes and 298 points; representative bulk, West River, and Min River paths selected the expected corridor sets. A local browser visual pass loaded the Tencent base map with no console errors.
+- Node-master, loader, capability, exact-OD Provider, south-port selection, and full-flow focused suites passed.
+- The exhaustive workbook-backed exact-OD audit found 193 selected barge rates and zero latest-price conflict groups. It generated all 163 corn-applicable and all 133 wheat-applicable exact OD edges after scope filtering.
+- The representative offline full-flow for `北良港 -> 广西富丰集团有限公司` built direct-truck and barge alternatives in one graph after candidate-width control: 24 transport edges, including 9 barge and 9 truck edges. The winning route remains determined independently by cost and time rather than by the presence of a barge option.
+- Final independent full pytest passed with `459 passed in 2.02s`; real-data smoke passed with 492 freight rates, 972 standard nodes, 302 billed/graph-ready validation candidates, and zero missing node IDs. The authorized Tencent probe and full-flow case both resolved successfully. The unified smoke wrapper's fixed pytest temp directory was locked by Windows, so its pytest substep was replaced by the independent unique-`basetemp` run rather than deleting the locked directory.
+- Review hardening prevents proximity-only node aliasing, keeps role inference on the authoritative classifier, reserves an alternative-transport candidate even when the initial shortlist is all direct-road preferred, continues past unusable nearby transfer ports until three complete transfer paths are found, and only reports exact-OD origins whose freight, capability and time inputs can actually form an edge. Direct exact-OD customer barge delivery is now covered by full-flow tests and included in the barge-edge count.
+
+## 2026-07-30
+
+### Changed
+
+- Added `src/application/route_planning.py` as the first UI-independent application boundary. `RoutePlanningRequest` now owns the shared north-port, customer, optional south-port, region, and order input; `RoutePlanningResponse` owns the structured result already consumed by the leadership CLI and local Web adapter.
+- Added `RoutePlanningService` as the common application entry point and routed both CLI and Web calculations through it. The existing `build_full_flow_demo` engine remains behavior-compatible behind `plan_full_flow`; `FullFlowDemoResult` remains as a compatibility alias.
+- Kept freight, shipping-time, port-candidate, graph-construction, cost/time Dijkstra, and Web serialization behavior unchanged. Full orchestration still resides in `leader_full_flow.py` and will migrate incrementally rather than through a broad refactor.
+- Changed north-to-south bulk south-port admission so an otherwise unclassified registered port/wharf may use an applicable bulk-grain freight-origin record as business evidence. Evidence is package- and commodity-aware and may come from a truck or barge record.
+- Kept confirmed inland ports, railway stations, customer facilities, and explicit bulk-capability exclusions blocked even when freight records exist. Container-only port origins remain outside the bulk south-port pool and are reported separately as potential transfer ports pending a future explicit node functional role.
+- Updated the read-only order/port audit to inspect all freight-origin transport modes for bulk identity evidence while retaining maintained truck-rate availability as a separate status. Ports admitted through barge-origin evidence may still use the confirmed unknown-truck rule when Tencent road distance is available.
+- Added tri-state `is_transfer_port` to the W3 port-capability contract, CSV aliases, audit row output, and synthetic data template. The value is independent from waterway role and graph-edge role.
+- Required a `south_to_customer/transfer` barge destination to have an explicit transfer-port role. Blank role data remains unknown: destination discovery omits it and explicit formal edge construction returns manual review rather than guessing.
+- Added structured `SouthPortCandidateDecision` records to the application response. Full-flow now traces identity exclusions, candidate-limit decisions, trunk/operation-fee/second-stage blockers, and final graph inclusion per relevant origin node.
+- Exposed the same candidate decisions in the leadership CLI and Web JSON/UI run log. The presentation adapters only format the application result and do not recalculate eligibility.
+- Moved automatic/explicit south-port selection, bulk freight-origin evidence, ranking, and distance pre-sort into `src/application/south_port_selection.py`. `leader_full_flow.py` now consumes `SouthPortSelection` and preserves its existing error/output compatibility.
+- Added direct application-layer tests for barge-origin bulk evidence, confirmed inland exclusions, customer-facility exclusions, and container-only explicit selection.
+- Kept explicit CSV schemas in the data-foundation audit even when a formal source currently has zero rows. The empty W3 capability audit now still exposes `is_transfer_port` and the remaining contract fields for safe data-platform/manual handoff.
+
+### Verification
+
+- The new application-contract, leader full-flow integration, and Web adapter suite passed with `38 passed in 0.95s`.
+- The CLI `full-flow --help` entry loaded successfully without accessing Tencent or real-data APIs.
+- The affected node-role, order/port audit, and leader full-flow suite passed with `54 passed in 0.59s`.
+- The refreshed no-Tencent real-data audit covered 108 order scenarios and 120 relevant/registered nodes. It identified 17 automatic bulk south-port origins, 5 confirmed inland exclusions, 4 explicit capability exclusions, 10 container-only potential transfer ports, and 65 registered manual-only ports.
+- The combined W3 loader/template/audit, inland-waterway Provider, full-flow, node-role, and admission-audit suite passed with `79 passed in 0.73s`.
+- The application-contract, full-flow, Web serialization, frontend behavior, and geometry suite passed with `42 passed in 0.51s`.
+- The new south-port application selector plus full-flow, shared application-contract, and Web regression suite passed with `41 passed in 0.98s`.
+- The unified developer smoke passed with `434 passed in 2.61s`; real-data smoke passed with 492 freight rates, 367 standard nodes, 312 billed/graph-ready validation candidates, and zero missing node IDs. The restricted Tencent probe returned traceable `manual_review` on `ConnectionError`, not live-API success.
+- The final affected audit/application/full-flow regression passed with `37 passed in 0.47s`. The refreshed read-only data-foundation audit reports zero unregistered freight locations, two unresolved railway-style AdditionalFee nodes, zero formal port-capability rows, eight region mappings, 69 operation-fee rates, two explicit exemptions, and eight inland-waterway time records.
+- The W3 loader now distinguishes a missing optional source from a header-only source; both remain nonfatal, but the latter emits an explicit empty-source warning. Its focused reference/audit/template regression passed with `10 passed in 0.20s`.
+- Revised the Web bulk-shipping schematic corridor to stay materially closer to mainland China's coast. Guangxi-bound routes now pass through the Qiongzhou Strait into the Beibu Gulf instead of detouring south of Hainan; the source version is `china_coastal_waters_schematic/1.1`.
+- This is display-only geometry and does not alter costs, times, candidates, graph edges, or Dijkstra. Web geometry/serialization regression passed with `12 passed in 0.42s`; a local coarse-coast visual review confirmed the new corridor and strait passage.
+
+## 2026-07-29
+
+### Changed
+
+- Re-established the long-term route architecture as exactly two business stages: north port to south port, then south port to customer. A business stage may contain multiple graph edges and multiple transport modes; the current Min River route remains one Demo/data instance rather than a third stage or a fixed topology.
+- Replaced mode-shaped `TransportStage` values with `north_to_south` and `south_to_customer`, and added an independent `TransportEdgeRole` (`trunk`, `transfer`, or `delivery`). Edge IDs, graph attributes, `RouteSegment`, row export, and Web JSON now preserve both dimensions separately from `transport_mode`.
+- Marked current bulk-shipping edges as `north_to_south/trunk`, barge-to-transfer-port edges as `south_to_customer/transfer`, and road-to-customer edges as `south_to_customer/delivery`.
+- Removed the full-flow orchestration's hard-coded Nanping transfer-port list. Inland-waterway Providers now expose capability-backed destination candidates, which full-flow resolves through `NodeRegistry` before requesting an applicable edge.
+- Preserved `time_scope` together with stage and edge role in `RouteSegment`, row exports, and Web JSON. Full-flow now also merges repeated shared downstream edges by `edge_id` before graph construction, preventing multiple south ports that share one transfer-port delivery leg from creating duplicate-edge build issues.
+- Changed the Web map styling boundary to use explicit `transportStage` instead of assuming segment number one is always the only north-to-south edge.
+- Added D-050 and reconciled older long-term wording about three-edge Demo paths, customer terminals, mode-shaped stages, and the current Min River example.
+- Added D-051 to preserve leadership-confirmed CLI/Web inputs and outputs as a stable product contract while keeping candidate generation, Provider composition, graph topology, and search algorithms independent from Demo presentation needs.
+- Added a strict Loader for the 99-row `码头信息维护0729版.xlsx` node master. The latest workbook names, aliases, and coordinates now overlay the older coordinate JSON while preserving existing canonical names and stable node IDs; ambiguous identity matches fail for manual review and older/newer coordinate differences remain auditable.
+- Registered the workbook-only 南平港 node and refreshed the coordinates/aliases for 军航码头、福州马尾港、福州松下码头、秀屿港. The real registry now contains 367 standard nodes and retains 15 coordinate-source conflicts for review.
+- Narrowed the Fujian inland-waterway capability scope to the sole maintained route `南平港↔军航码头`. 南平港 supports bulk/container corn and wheat plus barge/rail modes, but cannot receive the sea-going north-south bulk trunk. The confirmed bulk barge rule is 50 yuan/ton and 15 complete-segment hours in either direction.
+- Added explicit bulk-trunk capability exclusions so container-only Mawei and capability-unconfirmed Songxia do not enter automatic or manually selected bulk-grain trunk routing. Registered-only ports are kept in manual-selection audit scope rather than being promoted to automatic candidates.
+- Removed 福州马尾港 from the currently maintained Min River route while retaining its sea/inland identity and container-only corn/wheat capability. Current customer factories remain non-terminal nodes.
+- Required an explicit sea-port or sea/inland marker for every north-south bulk-trunk destination. Inland and unmarked ports are rejected from automatic and explicit south-port selection; the prior unclassified-origin fallback is no longer used for this stage.
+- Resolved waterway markers across the canonical name and explicit aliases of the same standard node, while retaining conflicting alias roles as unknown instead of choosing one silently.
+- Removed the direct south-port-to-customer barge assumption from `leader_full_flow`. Current customer factories remain non-terminal nodes.
+- Added the confirmed Min River transfer alternative: bulk shipping to 军航码头, barge to 南平港, then truck to the customer. The direct military-port truck route remains parallel in the same `MultiDiGraph`; the barge branch is added only when the Nanping-to-customer road result also resolves.
+- Added intermediate-port coordinates to the full-flow/Web result so barge geometry remains explicitly schematic while the inland-port truck segment retains its Tencent road polyline.
+- Generated a 77-row waterway-role confirmation table and a dual-track data-confirmation/development SOP. Previously ignored 百达码头 and 红东码头 are excluded without asking for duplicate confirmation.
+- Added explicit customer and port-waterway role compatibility records for the first business-confirmed node set. 东莞深粮 and 平和县储备粮 are customer factories; 清远清新码头, 苏湾港, 贵港白沙码头, and 韶关北江国际港（白土码头） are inland ports excluded from the north-south bulk trunk.
+- Confirmed 军航码头 as a Fujian Min River sea/inland dual-use port and mapped it to the 马尾 freight group and 福建 time region. Confirmed 洋浦港 as a sea port and mapped it to the 马村/海口 freight group and 海南 time region.
+- Applied the same waterway-role boundary to automatic candidate selection, explicit `--south-port` validation, and the read-only order/port admission audit. Inland ports remain available for future routes inside the second business stage when their route-specific data is complete.
+- Updated the audit wording and long-term project files so excluded inland/customer nodes are not described as unresolved freight candidates.
+
+### Verification
+
+- The final affected transport-contract, graph/result, inland-waterway Provider, full-flow, and Web suite passed with `60 passed in 0.45s`.
+- Developer smoke passed with `418 passed in 1.57s`; real-data smoke passed with 492 freight rates, 367 standard nodes, 312 graph-ready billed candidates, and zero missing node IDs. The restricted Tencent probe returned traceable `manual_review` on `ConnectionError` and is not live-API success evidence.
+- The focused node-master, data-loader, role, inland-waterway, admission-audit, full-flow, and Web API suite passed with `81 passed in 1.12s`.
+- The refreshed read-only audit covered 108 order scenarios and 117 registered/relevant nodes: 9 explicitly sea-marked automatic bulk candidates and 108 nonautomatic or confirmed-excluded nodes, with 116 deduplicated manual-review items. The separate sea-marker table contains 77 nodes; 南平港 is explicitly excluded as an inland port.
+- The affected role, Min River, admission-audit, full-flow, and Web tests passed with `67 passed in 0.54s`.
+- Developer smoke passed with `413 passed in 1.64s`; real-data smoke passed with 312 graph-ready billed candidates and zero missing node IDs. The Tencent probe remained `manual_review` on restricted-process `ConnectionError`.
+- Min River transfer, full-flow and Web affected tests passed with `36 passed in 0.45s`. Final developer smoke passed with `413 passed in 1.75s`; real-data smoke passed, and the restricted Tencent probe remained `manual_review`.
+- Developer smoke passed with `409 passed in 1.73s`; real-data smoke passed with 492 freight rates, 367 standard nodes, 312 graph-ready billed candidates, and zero missing node IDs. The restricted Tencent probe returned `manual_review` on `ConnectionError` and is not API-success evidence.
+- Affected node-role, bulk-shipping, admission-audit, leader full-flow, and local Web API tests passed with `52 passed in 0.63s`.
+- The refreshed read-only real-data audit covered 108 order scenarios and 64 related nodes: 42 north-south candidate-style nodes, 22 nonautomatic or confirmed-excluded nodes, and 126 deduplicated manual-review items.
+- For representative 500-ton bulk corn and wheat orders under domestic and external trade, all four scenarios produced 13 automatic candidates, 13 offline-ready candidates, and zero pre-Tencent bulk-trunk blockers. Soybean and container scope remain unresolved as documented.
+
+## 2026-07-28
+
+### Changed
+
+- Extended W5 operation-fee matching with an approved third-priority fallback: after exact and explicitly maintained region rules, the Provider may select the geographically nearest applicable formal rate in the same traceably resolved business region. The result remains `regional_proxy` and retains reference port, distance, region, mapping basis, rule ID/version, and the statement that it is not the target port's exact rate.
+- Added a safe nearest-regional bulk-shipping time resolver. It requires a unique confirmed sea-capability record before proxying complete-segment time and never supplies a freight destination group or physical connectivity.
+- Added a formal inland-waterway freight CSV Loader and Provider, plus a storage-independent barge-edge Provider that combines endpoint region/capability, fare, and complete-segment time.
+- Added the confirmed Fujian Min River business rule to ignored local data: 15 hours each direction and 50 yuan per ton for bulk grain of any commodity. Added a sanitized freight-table template and Loader test.
+- Extended `leader_full_flow` so truck and barge can enter the `MultiDiGraph` as parallel second-stage alternatives, remaining placeholder capability is explicitly counted/disclosed, and a registered south port may be supplied with `--south-port`.
+- Added a loopback-only local route presentation service and static Tencent-map page. It accepts transport/order inputs, reuses the full-flow orchestration, and displays both objectives, cost components, warnings/errors, candidates and node overlays.
+- Upgraded map overlays to per-segment geometry. Tencent driving `routes[0].polyline` is decoded and retained from the same response used for distance/time, while bulk shipping uses an explicitly schematic dashed China-offshore control-point line. Missing road geometry remains unavailable rather than being replaced with a misleading straight line; barge geometry remains explicitly schematic.
+- Kept map geometry outside `TransportEdge` and Dijkstra through an edge-ID side table, and changed route responses to `Cache-Control: no-store`.
+- Fixed the result-state visibility rule so the initial “等待测算” panel is removed after a successful calculation instead of remaining underneath the route result.
+- Cleared prior route overlays and the prior graph-edge badge after a failed calculation, and made a late-loading Tencent map render an already-resolved result instead of remaining blank.
+- Added a read-only order/port admission audit. It derives current commodities, legal package/unit pairs, trade types and bulk-vessel capacity boundaries, then checks every order scenario against the last-mile candidate source, bulk-shipping match and south-port operation-fee Provider without calling Tencent or writing business data.
+- The audit emits scenario summaries, scenario-by-port stage results, unaggregated issues and a deduplicated manual-review CSV under ignored `output/`. It distinguishes automatic-candidate gaps, manually selectable registered ports, current implementation scope, vessel-capacity limits and the remaining Tencent road dependency.
+- Aligned the audit with the full-flow candidate fallback when fewer than two port-like rate origins exist, added registered port-like nodes to the explicit-south-port review scope, retained CSV schemas for empty result sets, and made the unsupported `柜` operation-fee unit explicit without converting it to `箱`.
+- Added a shared conservative node-role classifier from confirmed naming rules. Railway-station names and customer facility/company names are now excluded from automatic fallback and explicit south-port selection; customer-owned terminals must use separately maintained port/terminal nodes.
+- Updated long-term project state, architecture, decisions, plan, README, and W3/W5 data-template documentation for the new boundaries.
+
+### Verification
+
+- Affected operation-fee, time-proxy, inland-waterway, full-flow, Web API, and template tests passed before the final full run.
+- The new order/port admission audit and affected bulk-shipping, operation-fee, data-audit, full-flow and request-contract tests passed `64 passed in 0.62s`.
+- After the geometry upgrade, developer smoke passed with `372 passed in 1.95s`; the real-data chain still passed with 312 graph-ready billed candidates and zero missing node IDs.
+- The same smoke run's real-data chain passed with 492 freight rates, 303 nodes, 18 AdditionalFee records, 312 graph-ready billed candidates, and zero missing node IDs.
+- Final developer smoke after the exhaustive order/port audit passed with `377 passed in 1.77s`; real-data smoke passed with 312 graph-ready billed candidates and zero missing node IDs. The Tencent probe safely returned `manual_review` because the current process could not reach the API, so it is not live-API success evidence.
+- Node-role classification, admission audit, full-flow, and local Web API affected tests passed `36 passed in 0.95s`. The refreshed read-only audit reduced the reviewed scope from 77 to 64 relevant nodes and deduplicated manual-confirmation items from 249 to 146.
+- End-of-day developer smoke passed with `391 passed in 1.98s`; real-data smoke passed with 312 graph-ready billed candidates and zero missing node IDs. The current-process Tencent probe again returned `manual_review` on connection failure and is not API-success evidence.
+- The user confirmed the same Key has both JavaScript API and WebService API permissions. An allowed-network in-browser rehearsal rendered the Tencent base map, returned the resolved 379,750-yuan route, preserved 531 Tencent points for the selected truck segment, and rendered the bulk route as an offshore dashed schematic. The restricted smoke-process Tencent probe fell back safely to `manual_review` on network denial and is not counted as separate live-API evidence.
+
 ## 2026-07-27
 
 ### Changed

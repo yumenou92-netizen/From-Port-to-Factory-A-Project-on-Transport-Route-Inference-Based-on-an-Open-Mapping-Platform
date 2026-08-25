@@ -244,6 +244,8 @@ def classify_destination_scope(destination: str) -> str:
 def classify_bulk_shipping_destination(port_name: str) -> tuple[str | None, str | None]:
     name = str(port_name).strip()
     rules = (
+        ("军航码头", "马尾", "福建"),
+        ("洋浦港", "马村/海口", "海南"),
         ("马尾", "马尾", "福建"),
         ("秀屿", "秀屿", "福建"),
         ("漳州", "漳州", "福建"),

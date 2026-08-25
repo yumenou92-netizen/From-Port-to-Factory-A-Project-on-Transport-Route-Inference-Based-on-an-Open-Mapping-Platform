@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="北港—南港—客户工厂运输路径规划系统"
+    />
+    <title>运输路径规划系统</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">COFCO TRADE (Shenzhen) · SCM · TSM</p>
+          <h1>运输路径规划系统</h1>
+          <p class="subhead">散粮·内贸展示版｜北港—南港—客户工厂双目标路径决策</p>
+        </div>
+        <div class="system-status" aria-live="polite">
+          <span class="status-dot" id="serviceDot"></span>
+          <span id="serviceStatus">正在连接本地模型</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="control-rail" aria-label="运输条件与订单输入">
+          <form id="routeForm">
+            <section class="form-section">
+              <div class="section-number">01</div>
+              <div>
+                <h2>运输条件</h2>
+                <p>指定南港可留空，由模型自动比较。</p>
+              </div>
+              <label>
+                <span>北-南港运段运输方式</span>
+                <input name="transportMode" type="hidden" value="散船" />
+                <div class="readonly-field">散船 <em>当前已接入</em></div>
+              </label>
+              <label>
+                <span>出发北港</span>
+                <input name="origin" value="北良港" required />
+              </label>
+              <label>
+                <span>客户工厂</span>
+                <input
+                  name="destination"
+                  value="广西富丰集团有限公司"
+                  required
+                />
+              </label>
+              <div class="field-pair">
+                <label>
+                  <span>指定南港 <em>可选</em></span>
+                  <input name="southPort" placeholder="留空自动选取" />
+                </label>
+                <label>
+                  <span>地点检索区域</span>
+                  <input name="region" value="全国" />
+                </label>
+              </div>
+            </section>
+
+            <section class="form-section order-section">
+              <div class="section-number">02</div>
+              <div>
+                <h2>订单信息</h2>
+                <p>当前展示范围：散粮、内贸、玉米/小麦；其他方式已预留接口，暂不参与测算。</p>
+              </div>
+              <div class="field-pair">
+                <label>
+                  <span>粮食品种</span>
+                  <select name="commodity">
+                    <option>玉米</option>
+                    <option>小麦</option>
+                  </select>
+                </label>
+                <label>
+                  <span>贸易类型</span>
+                  <input name="tradeType" type="hidden" value="内贸" />
+                  <div class="readonly-field">内贸 <em>当前已接入</em></div>
+                </label>
+              </div>
+              <div class="field-pair">
+                <label>
+                  <span>打包方式</span>
+                  <input name="packageType" type="hidden" value="散粮" />
+                  <div class="readonly-field">散粮 <em>当前已接入</em></div>
+                </label>
+                <label>
+                  <span>计费单位</span>
+                  <input name="quantityUnit" type="hidden" value="吨" />
+                  <div class="readonly-field">吨</div>
+                </label>
+              </div>
+              <label>
+                <span>重量 / 数量</span>
+                <input
+                  name="quantity"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value="3160"
+                  required
+                />
+              </label>
+            </section>
+
+            <button class="run-button" type="submit">
+              <span>运行双目标测算</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+          </form>
+        </aside>
+
+        <section class="map-stage" aria-label="腾讯地图路线展示">
+          <div id="map" class="map-canvas"></div>
+          <div id="mapLoading" class="map-loading" hidden>
+            <span class="spinner" aria-hidden="true"></span>
+            <strong id="mapLoadingTitle">正在测算路线</strong>
+            <span id="mapLoadingDesc">正在检索候选南港并拼接运输网络…</span>
+          </div>
+          <div id="mapFallback" class="map-fallback">
+            <p class="map-kicker">TENCENT MAP</p>
+            <strong>正在加载地图底座</strong>
+            <span>即使地图 Key 暂不可用，模型结果仍会在下方展示。</span>
+          </div>
+          <div class="map-caption">
+            <span>路线几何</span>
+            <strong>航线拟合 · 真实道路</strong>
+            <small>散船 / 驳船取自建航线控制点拟合；陆运取本次测算的腾讯驾车道路</small>
+          </div>
+          <div class="map-legend" aria-label="地图图例">
+            <span><i class="legend-line cost"></i>费用最低</span>
+            <span><i class="legend-line time"></i>时间最短</span>
+            <span><i class="legend-line shipping"></i>北港-南港</span>
+            <span><i class="legend-line land"></i>南港-工厂</span>
+            <span><i class="legend-node"></i>运输节点</span>
+            <small class="legend-note">颜色仅区分优化目标，不含优劣判断</small>
+          </div>
+        </section>
+
+        <section class="results-stage" aria-live="polite">
+          <div class="results-heading">
+            <div>
+              <p class="eyebrow">MODEL OUTPUT</p>
+              <h2>运行结果</h2>
+            </div>
+            <p class="results-hint">点击任意卡片，可在地图上突出显示对应路线</p>
+          </div>
+
+          <div id="emptyState" class="empty-state">
+            <strong id="emptyStateTitle">等待测算</strong>
+            <span id="emptyStateDesc">提交运输条件后，这里将展示路径、总费用、总时间与分段依据。</span>
+            <ul id="errorChecklist" class="error-checklist" hidden>
+              <li>客户工厂名称是否准确、完整</li>
+              <li>重量 / 数量是否在合理范围</li>
+              <li>网络连接是否正常</li>
+            </ul>
+            <button id="retryButton" class="retry-button" type="button" hidden>重新测算</button>
+          </div>
+
+          <article id="routeResult" class="route-result" hidden>
+            <div class="route-grid">
+              <section class="route-card" data-route="lowestCost">
+                <header class="route-card-head">
+                  <span class="route-card-kicker">费用最低</span>
+                  <strong id="pathNamesLowestCost" class="route-card-path">—</strong>
+                </header>
+                <dl class="route-card-stats">
+                  <div>
+                    <dt>总费用</dt>
+                    <dd id="totalCostLowestCost">—</dd>
+                  </div>
+                  <div>
+                    <dt>总时效</dt>
+                    <dd id="totalTimeLowestCost">—</dd>
+                  </div>
+                  <div>
+                    <dt>折合运费（元/吨）</dt>
+                    <dd id="unitCostLowestCost">—</dd>
+                  </div>
+                </dl>
+                <ol id="segmentListLowestCost" class="segment-list"></ol>
+              </section>
+              <section class="route-card" data-route="fastestTime">
+                <header class="route-card-head">
+                  <span class="route-card-kicker">时间最短</span>
+                  <strong id="pathNamesFastestTime" class="route-card-path">—</strong>
+                </header>
+                <dl class="route-card-stats">
+                  <div>
+                    <dt>总费用</dt>
+                    <dd id="totalCostFastestTime">—</dd>
+                  </div>
+                  <div>
+                    <dt>总时效</dt>
+                    <dd id="totalTimeFastestTime">—</dd>
+                  </div>
+                  <div>
+                    <dt>折合运费（元/吨）</dt>
+                    <dd id="unitCostFastestTime">—</dd>
+                  </div>
+                </dl>
+                <ol id="segmentListFastestTime" class="segment-list"></ol>
+              </section>
+            </div>
+          </article>
+
+          <aside class="run-log">
+            <div class="run-log-heading">
+              <h3>运行信息</h3>
+              <span id="edgeCount">尚未运行</span>
+              <button id="logToggle" class="log-toggle" type="button" aria-expanded="false">展开明细</button>
+            </div>
+            <div id="logBody" class="log-body" hidden>
+              <ul id="messageList">
+                <li class="info">本页不会把腾讯地图 Key 写入前端源码。</li>
+              </ul>
+            </div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

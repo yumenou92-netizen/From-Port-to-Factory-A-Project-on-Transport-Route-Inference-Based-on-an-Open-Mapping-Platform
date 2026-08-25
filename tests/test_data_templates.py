@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.data.inland_waterway_freight import load_inland_waterway_freight_records
 from src.data.inland_waterway_time import load_inland_waterway_time_records
 from src.data.port_reference import (
     load_operation_fee_region_assignments,
@@ -28,12 +29,17 @@ def test_w3_w5_data_templates_match_current_loaders():
     inland_waterway_times = load_inland_waterway_time_records(
         TEMPLATE_DIR / "内河驳船运输时效.example.csv"
     )
+    inland_waterway_freight = load_inland_waterway_freight_records(
+        TEMPLATE_DIR / "内河驳船运输费率.example.csv"
+    )
 
     assert len(capabilities) == 2
     assert capabilities[0].canonical_name == "示例海港A"
     assert capabilities[0].can_receive_bulk_shipping is True
+    assert capabilities[0].is_transfer_port is False
     assert capabilities[0].capability_data_confirmed
     assert capabilities[1].can_receive_bulk_shipping is None
+    assert capabilities[1].is_transfer_port is None
     assert capabilities[1].can_handle_barge is None
     assert not capabilities[1].capability_data_confirmed
 
@@ -58,3 +64,9 @@ def test_w3_w5_data_templates_match_current_loaders():
     assert len(inland_waterway_times) == 1
     assert inland_waterway_times[0].time_scope == "complete_segment"
     assert inland_waterway_times[0].bidirectional
+
+    assert len(inland_waterway_freight) == 1
+    assert inland_waterway_freight[0].package_type == "散粮"
+    assert inland_waterway_freight[0].commodity_scope == ("*",)
+    assert inland_waterway_freight[0].fee_unit == "元/吨"
+    assert inland_waterway_freight[0].bidirectional

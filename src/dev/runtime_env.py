@@ -13,6 +13,7 @@ EXAMPLE_ENV_FILE = PROJECT_ROOT / "config" / "runtime_env.example.csv"
 LOCAL_TMP_DIR = PROJECT_ROOT / "local_env" / ".tmp"
 PATH_LIKE_KEYS = {
     "DATA_DIR",
+    "FREIGHT_WORKBOOK_PATH",
     "PYTHONPATH",
     "DATA_AUDIT_REPORT_PATH",
     "DATA_QUALITY_SUMMARY_PATH",

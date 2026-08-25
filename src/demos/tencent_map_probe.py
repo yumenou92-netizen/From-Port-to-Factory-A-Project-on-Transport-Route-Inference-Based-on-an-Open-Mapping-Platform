@@ -6,7 +6,7 @@ import sys
 from src.dev.runtime_env import DEFAULT_ENV_FILE, load_runtime_env
 
 DEFAULT_PROBE_REGION = "全国"
-DEFAULT_PROBE_ORIGIN = "江门市旺海饲料实业有限公司"
+DEFAULT_PROBE_ORIGIN = "漳州招商局经济技术开发区"
 DEFAULT_PROBE_DESTINATION = "北京站"
 
 try:

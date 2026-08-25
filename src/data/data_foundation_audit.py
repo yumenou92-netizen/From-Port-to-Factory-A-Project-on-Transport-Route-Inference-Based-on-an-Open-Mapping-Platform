@@ -68,6 +68,97 @@ class BulkWorkbookColumn:
     note: str
 
 
+REQUEST_PROFILE_FIELDS = tuple(RequestAuditRow.__dataclass_fields__)
+BULK_WORKBOOK_COLUMN_FIELDS = tuple(BulkWorkbookColumn.__dataclass_fields__)
+PORT_CAPABILITY_FIELDS = (
+    "node_id",
+    "canonical_name",
+    "region_code",
+    "infrastructure_type",
+    "can_receive_bulk_shipping",
+    "is_transfer_port",
+    "can_handle_barge",
+    "supported_package_types",
+    "supported_commodities",
+    "supported_transport_modes",
+    "city",
+    "shipping_time_region",
+    "confirmation_status",
+    "aliases",
+    "source",
+    "maintained_at",
+)
+REGION_MAPPING_FIELDS = (
+    "region_code",
+    "region_name",
+    "city_keywords",
+    "port_keywords",
+    "bulk_rate_destination_group",
+    "bulk_time_region",
+    "source",
+)
+OPERATION_FEE_REGION_ASSIGNMENT_FIELDS = (
+    "port_node_id",
+    "operation_fee_region_code",
+    "mapping_basis",
+    "mapping_rule_id",
+    "mapping_rule_version",
+    "confirmation_status",
+    "source",
+    "maintained_at",
+)
+PORT_OPERATION_FEE_FIELDS = (
+    "node_id",
+    "port_name",
+    "package_type",
+    "trade_type",
+    "fee_type",
+    "unit_price_yuan_per_ton",
+    "fee_unit",
+    "source_type",
+    "source",
+    "commodity_scope",
+    "aliases",
+    "maintained_at",
+    "operation_fee_region_code",
+    "is_region_reference",
+    "reference_port_node_id",
+    "mapping_source",
+    "mapping_basis",
+    "mapping_rule_id",
+    "mapping_rule_version",
+)
+PORT_OPERATION_FEE_EXEMPTION_FIELDS = (
+    "node_id",
+    "port_name",
+    "package_type",
+    "trade_type",
+    "fee_type",
+    "applicability",
+    "unit_price",
+    "reason",
+    "source",
+    "commodity_scope",
+    "aliases",
+    "maintained_at",
+)
+INLAND_WATERWAY_TIME_FIELDS = (
+    "origin_region_code",
+    "destination_region_code",
+    "duration_value",
+    "duration_unit",
+    "duration_hours",
+    "time_scope",
+    "bidirectional",
+    "source_type",
+    "source",
+    "rule_id",
+    "rule_version",
+    "maintained_at",
+)
+UNRESOLVED_LOCATION_FIELDS = ("name", "scope")
+
+
 @dataclass(frozen=True)
 class FoundationAudit:
     data_dir: str
@@ -377,6 +468,9 @@ def port_capability_to_row(record: Any) -> dict[str, Any]:
         "can_receive_bulk_shipping": (
             "" if record.can_receive_bulk_shipping is None else record.can_receive_bulk_shipping
         ),
+        "is_transfer_port": (
+            "" if record.is_transfer_port is None else record.is_transfer_port
+        ),
         "can_handle_barge": "" if record.can_handle_barge is None else record.can_handle_barge,
         "supported_package_types": "；".join(record.supported_package_types or ()),
         "supported_commodities": "；".join(record.supported_commodities or ()),
@@ -580,25 +674,42 @@ def write_audit_outputs(audit: FoundationAudit, output_dir: Path) -> tuple[Path,
     write_csv(
         output_dir / "data_foundation_request_profiles.csv",
         [asdict(row) for row in audit.request_rows],
+        fieldnames=REQUEST_PROFILE_FIELDS,
     )
     write_csv(
         output_dir / "data_foundation_bulk_workbook_columns.csv",
         [asdict(column) for column in audit.bulk_columns],
+        fieldnames=BULK_WORKBOOK_COLUMN_FIELDS,
     )
-    write_csv(output_dir / "data_foundation_port_capabilities.csv", audit.port_capability_rows)
-    write_csv(output_dir / "data_foundation_region_mappings.csv", audit.region_mapping_rows)
+    write_csv(
+        output_dir / "data_foundation_port_capabilities.csv",
+        audit.port_capability_rows,
+        fieldnames=PORT_CAPABILITY_FIELDS,
+    )
+    write_csv(
+        output_dir / "data_foundation_region_mappings.csv",
+        audit.region_mapping_rows,
+        fieldnames=REGION_MAPPING_FIELDS,
+    )
     write_csv(
         output_dir / "data_foundation_operation_fee_region_assignments.csv",
         audit.operation_fee_region_assignment_rows,
+        fieldnames=OPERATION_FEE_REGION_ASSIGNMENT_FIELDS,
     )
-    write_csv(output_dir / "data_foundation_port_operation_fees.csv", audit.port_operation_fee_rows)
+    write_csv(
+        output_dir / "data_foundation_port_operation_fees.csv",
+        audit.port_operation_fee_rows,
+        fieldnames=PORT_OPERATION_FEE_FIELDS,
+    )
     write_csv(
         output_dir / "data_foundation_port_operation_fee_exemptions.csv",
         audit.port_operation_fee_exemption_rows,
+        fieldnames=PORT_OPERATION_FEE_EXEMPTION_FIELDS,
     )
     write_csv(
         output_dir / "data_foundation_inland_waterway_times.csv",
         audit.inland_waterway_time_rows,
+        fieldnames=INLAND_WATERWAY_TIME_FIELDS,
     )
     write_csv(
         output_dir / "data_foundation_unresolved_locations.csv",
@@ -609,6 +720,7 @@ def write_audit_outputs(audit: FoundationAudit, output_dir: Path) -> tuple[Path,
             {"name": name, "scope": "port_operation_fee"}
             for name in audit.unresolved_port_operation_fee_nodes
         ],
+        fieldnames=UNRESOLVED_LOCATION_FIELDS,
     )
     return json_path, markdown_path
 
@@ -625,13 +737,15 @@ def to_jsonable(value: Any) -> Any:
     return value
 
 
-def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+def write_csv(
+    path: Path,
+    rows: list[dict[str, Any]],
+    *,
+    fieldnames: Sequence[str],
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if not rows:
-        path.write_text("", encoding="utf-8-sig")
-        return
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=list(fieldnames))
         writer.writeheader()
         writer.writerows(rows)
 

@@ -2,13 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Literal, Protocol, Sequence
 
 from src.domain.cost_rules import CostCalculationResult
 from src.domain.freight_rate import create_freight_rate
 from src.domain.route_request import RouteRequest
 from src.routing.shipping_time_provider import ShippingTimeResult
-from src.routing.transport_contracts import CostComponent, TimeScope
+from src.routing.transport_contracts import (
+    CostComponent,
+    TimeScope,
+    TransportEdgeRole,
+    TransportStage,
+)
 from src.routing.transport_edge import TransportEdge, build_transport_edge
 
 
@@ -17,6 +23,7 @@ InlandWaterwayStatus = Literal["generated", "not_applicable", "manual_review"]
 DEMO_INLAND_WATERWAY_RULE_ID = "demo_placeholder_inland_barge_rate_time"
 DEMO_INLAND_WATERWAY_RULE_VERSION = "0.1"
 SUPPORTED_DEMO_INLAND_REGIONS = {"fujian_minjiang", "pearl_river_delta"}
+MINJIANG_MAINTAINED_ENDPOINTS = frozenset({"南平港", "军航码头"})
 
 
 class InlandWaterwayProviderError(ValueError):
@@ -187,6 +194,7 @@ class PortCapabilityRecord:
     aliases: tuple[str, ...] = ()
     infrastructure_type: str = "unknown"
     can_receive_bulk_shipping: bool | None = None
+    is_transfer_port: bool | None = None
     supported_transport_modes: tuple[str, ...] | None = None
     city: str | None = None
     shipping_time_region: str | None = None
@@ -233,6 +241,11 @@ class PortCapabilityRecord:
             bool,
         ):
             raise InlandWaterwayProviderError("can_receive_bulk_shipping 必须是布尔值或 None。")
+        if self.is_transfer_port is not None and not isinstance(
+            self.is_transfer_port,
+            bool,
+        ):
+            raise InlandWaterwayProviderError("is_transfer_port 必须是布尔值或 None。")
         if self.confirmation_status not in {"confirmed", "manual_review"}:
             raise InlandWaterwayProviderError(
                 f"不支持的港口能力确认状态：{self.confirmation_status}"
@@ -268,6 +281,12 @@ class PortCapabilityRecord:
             and self.supported_commodities is not None
             and self.supported_transport_modes is not None
         )
+
+    @property
+    def transfer_port_role_confirmed(self) -> bool:
+        """Whether source-backed W3 data explicitly confirms transfer use."""
+
+        return self.confirmation_status == "confirmed" and self.is_transfer_port is True
 
 
 @dataclass(frozen=True)
@@ -382,7 +401,39 @@ class InlandWaterwayEdgeResult:
         return self.status == "generated"
 
 
+@dataclass(frozen=True)
+class InlandWaterwayEndpointCandidate:
+    """One capability-backed endpoint that the orchestration layer may register in a path.
+
+    This is deliberately a node/capability reference rather than a fixed route
+    template.  The caller still has to resolve the standard node and ask the
+    Provider to build an applicable edge for the current origin and order.
+    """
+
+    node_id: str | None
+    canonical_name: str
+    source: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "node_id", _optional_text(self.node_id))
+        object.__setattr__(
+            self,
+            "canonical_name",
+            _required_text(self.canonical_name, "内河候选端点名称"),
+        )
+        object.__setattr__(self, "source", _required_text(self.source, "内河候选端点来源"))
+
+
 class InlandWaterwayBargeProvider(Protocol):
+    def list_destination_candidates(
+        self,
+        *,
+        origin_node_id: str,
+        origin_name: str,
+        request: RouteRequest,
+    ) -> tuple[InlandWaterwayEndpointCandidate, ...]:
+        """Return capability-backed endpoints; it must not hard-code one demo path."""
+
     def build_barge_edge(
         self,
         *,
@@ -391,6 +442,8 @@ class InlandWaterwayBargeProvider(Protocol):
         destination_node_id: str,
         destination_name: str,
         request: RouteRequest,
+        transport_stage: TransportStage = "south_to_customer",
+        edge_role: TransportEdgeRole = "transfer",
     ) -> InlandWaterwayEdgeResult:
         """Build one barge edge when inland-waterway data is available and applicable."""
 
@@ -409,6 +462,21 @@ class DemoInlandWaterwayBargeProvider:
         self.region_mappings = tuple(region_mappings) or DEFAULT_REGION_MAPPING_RECORDS
         self.rate_time_records = tuple(rate_time_records) or DEFAULT_INLAND_WATERWAY_RATE_TIME_RECORDS
 
+    def list_destination_candidates(
+        self,
+        *,
+        origin_node_id: str,
+        origin_name: str,
+        request: RouteRequest,
+    ) -> tuple[InlandWaterwayEndpointCandidate, ...]:
+        return list_capability_backed_destinations(
+            port_capabilities=self.port_capabilities,
+            region_mappings=self.region_mappings,
+            origin_node_id=origin_node_id,
+            origin_name=origin_name,
+            request=request,
+        )
+
     def build_barge_edge(
         self,
         *,
@@ -417,6 +485,8 @@ class DemoInlandWaterwayBargeProvider:
         destination_node_id: str,
         destination_name: str,
         request: RouteRequest,
+        transport_stage: TransportStage = "south_to_customer",
+        edge_role: TransportEdgeRole = "transfer",
     ) -> InlandWaterwayEdgeResult:
         origin_region = self._match_region(origin_name)
         destination_region = self._match_region(destination_name)
@@ -426,6 +496,15 @@ class DemoInlandWaterwayBargeProvider:
             return self._not_applicable("起点和终点不属于同一内河航运区域，demo_placeholder 驳船边不生成。")
         if origin_region.region_code not in SUPPORTED_DEMO_INLAND_REGIONS:
             return self._not_applicable("当前 Demo Provider 仅支持福建闽江和珠三角内河航运区域。")
+        if not is_maintained_inland_waterway_pair(
+            origin_region_code=origin_region.region_code,
+            destination_region_code=destination_region.region_code,
+            origin_name=origin_name,
+            destination_name=destination_name,
+        ):
+            return self._not_applicable(
+                "当前闽江航线只维护南平港与军航码头双向运输，其他闽江端点组合不生成驳船边。"
+            )
 
         origin_capability = self._match_capability(
             node_id=origin_node_id,
@@ -439,6 +518,10 @@ class DemoInlandWaterwayBargeProvider:
         )
         if origin_capability is None or destination_capability is None:
             return self._not_applicable("港口能力表未确认起终点均可形成内河驳船段，demo_placeholder 驳船边不生成。")
+        if edge_role == "transfer" and destination_capability.is_transfer_port is not True:
+            return self._not_applicable(
+                f"节点 {destination_name} 未标记为中转港，demo_placeholder 驳船中转边不生成。"
+            )
         if not origin_capability.supports_order(request) or not destination_capability.supports_order(request):
             return self._not_applicable("港口能力表显示起终点不同时支持当前订单包装/品种的驳船作业。")
 
@@ -507,7 +590,8 @@ class DemoInlandWaterwayBargeProvider:
             time_result,
             commodity=request.commodity,
             data_source=price_source,
-            transport_stage="barge_last_mile",
+            transport_stage=transport_stage,
+            edge_role=edge_role,
             cost_components=(cost_component,),
         )
         if not edge.is_available:
@@ -567,6 +651,85 @@ class DemoInlandWaterwayBargeProvider:
     @staticmethod
     def _not_applicable(message: str) -> InlandWaterwayEdgeResult:
         return InlandWaterwayEdgeResult(status="not_applicable", edge=None, message=message)
+
+
+def is_maintained_inland_waterway_pair(
+    *,
+    origin_region_code: str,
+    destination_region_code: str,
+    origin_name: str,
+    destination_name: str,
+) -> bool:
+    """Apply the explicitly maintained endpoint boundary for the Min River."""
+
+    if "fujian_minjiang" not in {
+        origin_region_code,
+        destination_region_code,
+    }:
+        return True
+    if origin_region_code != "fujian_minjiang" or destination_region_code != "fujian_minjiang":
+        return False
+    endpoints = {
+        _canonical_minjiang_endpoint(origin_name),
+        _canonical_minjiang_endpoint(destination_name),
+    }
+    return None not in endpoints and endpoints == MINJIANG_MAINTAINED_ENDPOINTS
+
+
+def list_capability_backed_destinations(
+    *,
+    port_capabilities: Sequence[PortCapabilityRecord],
+    region_mappings: Sequence[RegionMappingRecord],
+    origin_node_id: str,
+    origin_name: str,
+    request: RouteRequest,
+) -> tuple[InlandWaterwayEndpointCandidate, ...]:
+    """List data-driven barge endpoints without asserting that an edge is usable."""
+
+    origin_regions = [record for record in region_mappings if record.matches(origin_name)]
+    if len(origin_regions) != 1:
+        return ()
+    origin_region = origin_regions[0]
+
+    candidates: list[InlandWaterwayEndpointCandidate] = []
+    seen: set[tuple[str | None, str]] = set()
+    for capability in port_capabilities:
+        if capability.matches(node_id=origin_node_id, name=origin_name):
+            continue
+        if (
+            capability.region_code is None
+            or capability.is_transfer_port is not True
+            or not capability.supports_order(request)
+        ):
+            continue
+        if not is_maintained_inland_waterway_pair(
+            origin_region_code=origin_region.region_code,
+            destination_region_code=capability.region_code,
+            origin_name=origin_name,
+            destination_name=capability.canonical_name,
+        ):
+            continue
+        key = (capability.node_id, capability.canonical_name)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(
+            InlandWaterwayEndpointCandidate(
+                node_id=capability.node_id,
+                canonical_name=capability.canonical_name,
+                source=capability.source,
+            )
+        )
+    return tuple(candidates)
+
+
+def _canonical_minjiang_endpoint(name: str) -> str | None:
+    normalized = re.sub(r"\s+", "", str(name).strip())
+    if normalized == "南平港":
+        return "南平港"
+    if normalized in {"军航码头", "福建军航码头"}:
+        return "军航码头"
+    return None
 
 
 def _required_text(value: object, field_name: str) -> str:
@@ -629,11 +792,11 @@ DEFAULT_REGION_MAPPING_RECORDS = (
     RegionMappingRecord(
         region_code="fujian_minjiang",
         region_name="福建闽江内河",
-        city_keywords=("福州", "马尾", "闽江"),
-        port_keywords=("马尾港", "马尾"),
+        city_keywords=("南平港", "军航码头"),
+        port_keywords=("南平港", "军航码头"),
         bulk_rate_destination_group="马尾",
         bulk_time_region="福建",
-        source="demo_placeholder:region_mapping:fujian_minjiang",
+        source="business_confirmation_2026-07-29",
     ),
     RegionMappingRecord(
         region_code="pearl_river_delta",
@@ -662,15 +825,39 @@ DEFAULT_REGION_MAPPING_RECORDS = (
 DEFAULT_PORT_CAPABILITY_RECORDS = (
     PortCapabilityRecord(
         node_id=None,
-        canonical_name="福建闽江内河 Demo 能力",
+        canonical_name="南平港",
+        region_code="fujian_minjiang",
+        can_handle_barge=True,
+        supported_package_types=("散粮", "集装箱"),
+        supported_commodities=("玉米", "小麦"),
+        source="business_confirmation_2026-07-29",
+        aliases=(),
+        infrastructure_type="inland_port",
+        can_receive_bulk_shipping=False,
+        is_transfer_port=True,
+        supported_transport_modes=("驳船", "铁路"),
+        city="南平",
+        shipping_time_region=None,
+        confirmation_status="confirmed",
+        maintained_at="2026-07-29",
+    ),
+    PortCapabilityRecord(
+        node_id=None,
+        canonical_name="军航码头",
         region_code="fujian_minjiang",
         can_handle_barge=True,
         supported_package_types=("散粮",),
-        supported_commodities=("*",),
-        source="demo_placeholder:port_capability:fujian_minjiang",
-        aliases=("福州", "马尾", "闽江"),
-        infrastructure_type="sea_river_integrated_port_or_customer_terminal",
+        supported_commodities=("玉米", "小麦"),
+        source="business_confirmation_2026-07-29",
+        aliases=(),
+        infrastructure_type="sea_river_integrated_port",
         can_receive_bulk_shipping=True,
+        is_transfer_port=True,
+        supported_transport_modes=("散船", "驳船"),
+        city="福州",
+        shipping_time_region="福建",
+        confirmation_status="confirmed",
+        maintained_at="2026-07-29",
     ),
     PortCapabilityRecord(
         node_id=None,
@@ -696,6 +883,7 @@ DEFAULT_PORT_CAPABILITY_RECORDS = (
         ),
         infrastructure_type="sea_river_integrated_port_or_customer_terminal",
         can_receive_bulk_shipping=True,
+        is_transfer_port=True,
     ),
 )
 

@@ -85,6 +85,51 @@ def test_same_day_conflicting_rates_require_review():
     assert result.review_issues[0].rates == (first, second)
 
 
+def test_same_day_transaction_rate_precedes_inquiry_rate():
+    inquiry = make_rate(
+        raw_price=20,
+        price_source="线下询价",
+        source_row_number=1,
+    )
+    transaction = make_rate(
+        raw_price=17,
+        price_source="临采成交",
+        source_row_number=2,
+    )
+
+    result = select_latest_freight_rates([inquiry, transaction])
+
+    assert result.selected_rates == (transaction,)
+    assert result.review_issues == ()
+    assert result.source_preference_resolution_count == 1
+
+
+def test_multiple_transaction_rates_still_require_manual_review():
+    inquiry = make_rate(
+        raw_price=20,
+        price_source="线下询价",
+        source_row_number=1,
+    )
+    first_transaction = make_rate(
+        raw_price=17,
+        price_source="临采成交",
+        source_row_number=2,
+    )
+    second_transaction = make_rate(
+        raw_price=16,
+        price_source="现货成交",
+        source_row_number=3,
+    )
+
+    result = select_latest_freight_rates(
+        [inquiry, first_transaction, second_transaction]
+    )
+
+    assert result.selected_rates == ()
+    assert result.review_issues[0].code == "same_day_conflict"
+    assert result.source_preference_resolution_count == 0
+
+
 def test_exact_same_day_duplicates_select_one_traceable_record():
     first = make_rate(source_row_number=1)
     duplicate = make_rate(source_row_number=2)

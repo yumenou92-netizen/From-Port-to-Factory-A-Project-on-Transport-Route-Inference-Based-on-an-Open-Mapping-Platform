@@ -20,6 +20,7 @@ from src.domain.latest_rate_selector import (
     effective_maintained_at,
     select_latest_freight_rates,
 )
+from src.domain.node_role import infer_node_role_from_name
 from src.domain.route_request import (
     RequestBillingValidation,
     RouteRequest,
@@ -27,6 +28,8 @@ from src.domain.route_request import (
 )
 
 if TYPE_CHECKING:
+    from src.data.node_master_maintenance import NodeMasterMaintenanceEntry
+    from src.data.port_node_maintenance import PortNodeMaintenanceEntry
     from src.domain.node_registry import NodeRegistry
 
 
@@ -143,6 +146,9 @@ class RealDataBundle:
     nodes: list[NodeRecord]
     additional_fees: list[AdditionalFee]
     node_registry: NodeRegistry | None = None
+    node_master_entries: tuple[NodeMasterMaintenanceEntry, ...] = ()
+    port_node_entries: tuple[PortNodeMaintenanceEntry, ...] = ()
+    freight_rate_source: Path | None = None
 
     @property
     def node_by_name(self) -> dict[str, NodeRecord]:
@@ -180,10 +186,47 @@ def data_dir_from_env() -> Path:
 
 def load_real_data_bundle(data_dir: str | Path) -> RealDataBundle:
     root = Path(data_dir)
-    rate_rows = read_json_lines(find_required_file(root, REAL_RATE_FILE))
+    from src.data.freight_workbook import (
+        FreightWorkbookError,
+        find_freight_workbook,
+        load_freight_workbook_rows,
+    )
+
+    try:
+        freight_workbook = find_freight_workbook(root)
+        if freight_workbook is not None:
+            freight_rate_source = freight_workbook
+            rate_source_rows = load_freight_workbook_rows(
+                freight_workbook
+            )
+        else:
+            freight_rate_source = find_required_file(
+                root,
+                REAL_RATE_FILE,
+            )
+            rate_source_rows = tuple(
+                enumerate(
+                    read_json_lines(freight_rate_source),
+                    start=1,
+                )
+            )
+    except FreightWorkbookError as exc:
+        raise DataLoadError(
+            f"优先正式运费工作簿无法安全加载：{exc}"
+        ) from exc
+    rate_rows = [row for _, row in rate_source_rows]
+    rate_location_names = {
+        text
+        for row in rate_rows
+        for field in ("始发", "到达")
+        if (text := str(row.get(field, "")).strip())
+    }
     coordinate_rows = read_json_lines(find_required_file(root, REAL_COORDINATE_FILE))
     additional_fee_rows = read_json_lines(find_required_file(root, REAL_ADDITIONAL_FEE_FILE))
-    nodes = [parse_node_record(row, index) for index, row in enumerate(coordinate_rows, start=1)]
+    coordinate_nodes = [
+        parse_node_record(row, index)
+        for index, row in enumerate(coordinate_rows, start=1)
+    ]
     from src.data.name_dictionary import (
         NameDictionaryError,
         build_external_alias_rules,
@@ -191,6 +234,17 @@ def load_real_data_bundle(data_dir: str | Path) -> RealDataBundle:
         load_name_dictionary_entries,
     )
     from src.domain.node_registry import build_node_registry
+    from src.domain.node_registry import AliasRule, ExternalAliasRule
+    from src.data.port_node_maintenance import (
+        PortNodeMaintenanceError,
+        find_port_node_maintenance_file,
+        load_port_node_maintenance_entries,
+    )
+    from src.data.node_master_maintenance import (
+        NodeMasterMaintenanceError,
+        find_node_master_maintenance_file,
+        load_node_master_maintenance_entries,
+    )
 
     try:
         name_dictionary_path = find_name_dictionary_file(root)
@@ -202,10 +256,179 @@ def load_real_data_bundle(data_dir: str | Path) -> RealDataBundle:
     except NameDictionaryError as exc:
         raise DataLoadError(f"名称字典无法安全加载：{exc}") from exc
 
-    node_registry = build_node_registry(nodes, external_alias_rules=external_alias_rules)
+    initial_registry = build_node_registry(
+        coordinate_nodes,
+        external_alias_rules=external_alias_rules,
+    )
+    node_master_entries = ()
+    port_node_entries = ()
+    try:
+        node_master_path = find_node_master_maintenance_file(root)
+        if node_master_path is not None:
+            node_master_entries = load_node_master_maintenance_entries(
+                node_master_path
+            )
+        port_maintenance_path = find_port_node_maintenance_file(root)
+        if port_maintenance_path is not None:
+            port_node_entries = load_port_node_maintenance_entries(
+                port_maintenance_path
+            )
+        maintenance_entries = (
+            node_master_entries or port_node_entries
+        )
+    except NodeMasterMaintenanceError as exc:
+        raise DataLoadError(f"节点信息维护表无法安全加载：{exc}") from exc
+    except PortNodeMaintenanceError as exc:
+        raise DataLoadError(f"码头信息维护表无法安全加载：{exc}") from exc
+
+    maintained_by_node_id: dict[
+        str,
+        tuple[NodeRecord, set[str], list[str]],
+    ] = {}
+    authoritative_master_name_owner = {
+        re.sub(r"\s+", "", name): entry.full_name
+        for entry in node_master_entries
+        for name in entry.all_names
+    }
+    for entry in maintenance_entries:
+        inferred_rate_aliases = (
+            _match_master_port_to_rate_names(
+                entry=entry,
+                rate_location_names=rate_location_names,
+                registry=initial_registry,
+                authoritative_name_owner=authoritative_master_name_owner,
+            )
+            if node_master_entries
+            else ()
+        )
+        entry_names = tuple(
+            dict.fromkeys((*entry.all_names, *inferred_rate_aliases))
+        )
+        existing_nodes = {
+            node.node_id: node
+            for name in entry_names
+            if (node := initial_registry.lookup(name)) is not None
+        }
+        if len(existing_nodes) > 1 and not node_master_entries:
+            names = "、".join(entry_names)
+            raise DataLoadError(
+                f"{entry.source} 的名称指向多个既有标准节点，需人工复核：{names}"
+            )
+        existing_node = (
+            next(iter(existing_nodes.values()), None)
+            if len(existing_nodes) == 1
+            else None
+        )
+        if (
+            existing_node is not None
+            and getattr(entry, "is_logistics_node", False)
+            and getattr(entry, "is_port_facility", False)
+            and existing_node.canonical_name != entry.full_name
+            and _looks_like_customer_facility(
+                existing_node.canonical_name
+            )
+        ):
+            # The new node master is authoritative for a separately named
+            # logistics port. An older alias dictionary must not collapse it
+            # back into the customer company node.
+            existing_node = None
+        canonical_name = (
+            entry.full_name
+            if node_master_entries
+            else (
+                existing_node.canonical_name
+                if existing_node is not None
+                else entry.full_name
+            )
+        )
+        canonical_node_id = make_node_id(canonical_name)
+        current = NodeRecord(
+            node_id=canonical_node_id,
+            name=canonical_name,
+            longitude=entry.longitude,
+            latitude=entry.latitude,
+        )
+        previous = maintained_by_node_id.get(canonical_node_id)
+        if previous is not None:
+            previous_node, names, sources = previous
+            if not (
+                math.isclose(
+                    previous_node.longitude,
+                    current.longitude,
+                    rel_tol=0,
+                    abs_tol=1e-6,
+                )
+                and math.isclose(
+                    previous_node.latitude,
+                    current.latitude,
+                    rel_tol=0,
+                    abs_tol=1e-6,
+                )
+            ):
+                raise DataLoadError(
+                    f"{entry.source} 与其他维护记录重复指向标准节点 "
+                    f"{canonical_name}，但坐标不一致。"
+                )
+            names.update(entry_names)
+            sources.append(entry.source)
+            continue
+        maintained_by_node_id[canonical_node_id] = (
+            current,
+            set(entry_names),
+            [entry.source],
+        )
+
+    maintenance_nodes: list[NodeRecord] = []
+    maintenance_alias_rules: list[ExternalAliasRule] = []
+    maintenance_union_rules: list[AliasRule] = []
+    for canonical_node_id, (
+        maintained_node,
+        maintained_names,
+        maintained_sources,
+    ) in maintained_by_node_id.items():
+        maintenance_nodes.append(maintained_node)
+        maintenance_alias_rules.append(
+            ExternalAliasRule(
+                canonical_name=maintained_node.name,
+                aliases=tuple(
+                    sorted(
+                        name
+                        for name in maintained_names
+                        if name != maintained_node.name
+                    )
+                ),
+                source=";".join(maintained_sources),
+            )
+        )
+        maintenance_union_rules.append(
+            AliasRule(
+                canonical_name=maintained_node.name,
+                aliases=tuple(
+                    sorted(
+                        name
+                        for name in maintained_names
+                        if name != maintained_node.name
+                    )
+                ),
+            )
+        )
+
+    nodes = [*maintenance_nodes, *coordinate_nodes]
+    node_registry = build_node_registry(
+        nodes,
+        alias_rules=maintenance_union_rules,
+        external_alias_rules=(
+            *maintenance_alias_rules,
+            *external_alias_rules,
+        ),
+    )
     freight_rates = []
-    for index, row in enumerate(rate_rows, start=1):
-        rate = parse_freight_rate(row, index)
+    for source_row_number, row in rate_source_rows:
+        rate = parse_freight_rate(
+            row,
+            source_row_number,
+            source_file=freight_rate_source.name,
+        )
         origin_node = node_registry.lookup(rate.origin_name)
         destination_node = node_registry.lookup(rate.destination_name)
         freight_rates.append(
@@ -221,7 +444,154 @@ def load_real_data_bundle(data_dir: str | Path) -> RealDataBundle:
         nodes=nodes,
         additional_fees=[parse_additional_fee(row, index) for index, row in enumerate(additional_fee_rows, start=1)],
         node_registry=node_registry,
+        node_master_entries=node_master_entries,
+        port_node_entries=port_node_entries,
+        freight_rate_source=freight_rate_source,
     )
+
+
+def _looks_like_customer_facility(name: str) -> bool:
+    return infer_node_role_from_name(name) == "customer_facility"
+
+
+def _match_master_port_to_rate_names(
+    *,
+    entry: object,
+    rate_location_names: set[str],
+    registry: NodeRegistry,
+    authoritative_name_owner: dict[str, str],
+) -> tuple[str, ...]:
+    if not (
+        getattr(entry, "is_logistics_node", False)
+        and getattr(entry, "is_port_facility", False)
+    ):
+        return ()
+    scored: list[tuple[int, str, str]] = []
+    for rate_name in rate_location_names:
+        owner = authoritative_name_owner.get(
+            re.sub(r"\s+", "", rate_name)
+        )
+        if owner is not None and owner != entry.full_name:
+            continue
+        if _looks_like_customer_facility(rate_name):
+            continue
+        node = registry.lookup(rate_name)
+        if node is None:
+            continue
+        name_score = max(
+            _port_name_similarity_score(
+                source_name,
+                rate_name,
+                allow_short_core=source_name in entry.aliases,
+            )
+            for source_name in entry.all_names
+        )
+        distance_km = _haversine_float_km(
+            entry.latitude,
+            entry.longitude,
+            node.latitude,
+            node.longitude,
+        )
+        score = name_score
+        if name_score > 0 and distance_km <= 20:
+            score += 5
+        if score >= 55:
+            scored.append((score, rate_name, node.node_id))
+    if not scored:
+        return ()
+    strong = [item for item in scored if item[0] >= 80]
+    if strong:
+        return tuple(sorted({item[1] for item in strong}))
+    best_score = max(item[0] for item in scored)
+    best = [item for item in scored if item[0] == best_score]
+    best_node_ids = {item[2] for item in best}
+    if len(best_node_ids) != 1:
+        return ()
+    return tuple(sorted(item[1] for item in best))
+
+
+def _port_name_similarity_score(
+    left: str,
+    right: str,
+    *,
+    allow_short_core: bool = False,
+) -> int:
+    normalized_left = _normalize_port_name(left)
+    normalized_right = _normalize_port_name(right)
+    if not normalized_left or not normalized_right:
+        return 0
+    if normalized_left == normalized_right:
+        return 100
+    left_core = re.sub(r"(?:码头|港区|港)$", "", normalized_left)
+    right_core = re.sub(r"(?:码头|港区|港)$", "", normalized_right)
+    if (
+        left_core == right_core
+        and len(left_core) >= 2
+    ):
+        return 95
+    if (
+        min(len(left_core), len(right_core))
+        >= (2 if allow_short_core else 3)
+        and (
+            left_core in right_core
+            or right_core in left_core
+        )
+    ):
+        return 90
+    if (
+        min(len(normalized_left), len(normalized_right)) >= 3
+        and (
+            normalized_left in normalized_right
+            or normalized_right in normalized_left
+        )
+    ):
+        return 80 + min(len(normalized_left), len(normalized_right))
+    if (
+        len(normalized_left) >= 4
+        and len(normalized_right) >= 4
+        and normalized_left[:2] == normalized_right[:2]
+        and normalized_left[-2:] == normalized_right[-2:]
+        and normalized_left[-2:] not in {"码头", "港区"}
+    ):
+        return 85
+    prefix_length = 0
+    for left_char, right_char in zip(normalized_left, normalized_right):
+        if left_char != right_char:
+            break
+        prefix_length += 1
+    return 60 + prefix_length if prefix_length >= 4 else 0
+
+
+def _normalize_port_name(value: str) -> str:
+    normalized = re.sub(r"[\s（）()·,，、/／-]+", "", str(value))
+    return (
+        normalized.replace("昇", "升")
+        .replace("洲", "州")
+        .replace("作业区", "")
+        .replace("有限责任公司", "")
+        .replace("有限公司", "")
+        .replace("国际港", "")
+    )
+
+
+def _haversine_float_km(
+    latitude_1: float,
+    longitude_1: float,
+    latitude_2: float,
+    longitude_2: float,
+) -> float:
+    radius_km = 6371.0088
+    phi_1 = math.radians(latitude_1)
+    phi_2 = math.radians(latitude_2)
+    delta_phi = math.radians(latitude_2 - latitude_1)
+    delta_lambda = math.radians(longitude_2 - longitude_1)
+    value = (
+        math.sin(delta_phi / 2) ** 2
+        + math.cos(phi_1)
+        * math.cos(phi_2)
+        * math.sin(delta_lambda / 2) ** 2
+    )
+    return radius_km * 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value))
 
 
 def find_required_file(data_dir: Path, file_name: str) -> Path:
@@ -250,26 +620,31 @@ def read_json_lines(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def parse_freight_rate(row: dict[str, Any], row_no: int) -> FreightRate:
+def parse_freight_rate(
+    row: dict[str, Any],
+    row_no: int,
+    *,
+    source_file: str = REAL_RATE_FILE,
+) -> FreightRate:
     required = ["始发", "到达", "运输方式", "包装方式", "适用品种", "费用", "费用单位", "价格来源"]
-    require_fields(row, required, REAL_RATE_FILE, row_no)
+    require_fields(row, required, source_file, row_no)
     try:
         return create_freight_rate(
-            origin_name=parse_required_text(row["始发"], REAL_RATE_FILE, row_no, "始发"),
-            destination_name=parse_required_text(row["到达"], REAL_RATE_FILE, row_no, "到达"),
-            transport_mode=parse_required_text(row["运输方式"], REAL_RATE_FILE, row_no, "运输方式"),
-            package_type=parse_required_text(row["包装方式"], REAL_RATE_FILE, row_no, "包装方式"),
-            commodity_scope=parse_required_text(row["适用品种"], REAL_RATE_FILE, row_no, "适用品种"),
-            raw_price=parse_decimal(row["费用"], REAL_RATE_FILE, row_no, "费用"),
-            raw_price_unit=parse_required_text(row["费用单位"], REAL_RATE_FILE, row_no, "费用单位"),
+            origin_name=parse_required_text(row["始发"], source_file, row_no, "始发"),
+            destination_name=parse_required_text(row["到达"], source_file, row_no, "到达"),
+            transport_mode=parse_required_text(row["运输方式"], source_file, row_no, "运输方式"),
+            package_type=parse_required_text(row["包装方式"], source_file, row_no, "包装方式"),
+            commodity_scope=parse_required_text(row["适用品种"], source_file, row_no, "适用品种"),
+            raw_price=parse_decimal(row["费用"], source_file, row_no, "费用"),
+            raw_price_unit=parse_required_text(row["费用单位"], source_file, row_no, "费用单位"),
             price_type="unit_price",
-            price_source=parse_required_text(row["价格来源"], REAL_RATE_FILE, row_no, "价格来源"),
-            maintained_at=parse_optional_text(row.get("维护日期"), REAL_RATE_FILE, row_no, "维护日期"),
-            source_file=REAL_RATE_FILE,
+            price_source=parse_required_text(row["价格来源"], source_file, row_no, "价格来源"),
+            maintained_at=parse_optional_text(row.get("维护日期"), source_file, row_no, "维护日期"),
+            source_file=source_file,
             source_row_number=row_no,
         )
     except FreightRateError as exc:
-        raise DataLoadError(f"{REAL_RATE_FILE} 第 {row_no} 行费率结构无效: {exc}") from exc
+        raise DataLoadError(f"{source_file} 第 {row_no} 行费率结构无效: {exc}") from exc
 
 
 def parse_node_record(row: dict[str, Any], row_no: int) -> NodeRecord:

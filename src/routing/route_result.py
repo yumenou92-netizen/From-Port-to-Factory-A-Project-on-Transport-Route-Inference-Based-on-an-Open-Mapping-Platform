@@ -15,7 +15,15 @@ try:
         SearchObjective,
         calculate_graph_weight_signature,
     )
-    from .transport_contracts import CostComponent, CostComposition
+    from .transport_contracts import (
+        CostComponent,
+        CostComposition,
+        TimeScope,
+        TransportContractError,
+        TransportEdgeRole,
+        TransportStage,
+        validate_transport_semantics,
+    )
 except ImportError:  # Support direct script-style imports used by demo scripts.
     from src.routing.route_search import (
         RouteSearchError,
@@ -24,7 +32,15 @@ except ImportError:  # Support direct script-style imports used by demo scripts.
         SearchObjective,
         calculate_graph_weight_signature,
     )
-    from src.routing.transport_contracts import CostComponent, CostComposition
+    from src.routing.transport_contracts import (
+        CostComponent,
+        CostComposition,
+        TimeScope,
+        TransportContractError,
+        TransportEdgeRole,
+        TransportStage,
+        validate_transport_semantics,
+    )
 
 
 RouteResultStatus = Literal["resolved", "no_path", "manual_review"]
@@ -62,6 +78,9 @@ class RouteSegment:
     cost_rule_version: str
     calculation_detail: str
     data_source: str
+    transport_stage: TransportStage | None = None
+    edge_role: TransportEdgeRole | None = None
+    time_scope: TimeScope | None = None
     cost_components: tuple[CostComponent, ...] = ()
 
     def __post_init__(self) -> None:
@@ -91,6 +110,17 @@ class RouteSegment:
         distance_source = _optional_text(self.distance_source)
         object.__setattr__(self, "distance_km", distance)
         object.__setattr__(self, "distance_source", distance_source)
+        object.__setattr__(self, "transport_stage", _optional_text(self.transport_stage))
+        object.__setattr__(self, "edge_role", _optional_text(self.edge_role))
+        object.__setattr__(self, "time_scope", _optional_text(self.time_scope))
+        try:
+            validate_transport_semantics(
+                self.transport_stage,
+                self.edge_role,
+                self.time_scope,
+            )
+        except TransportContractError as exc:
+            raise RouteResultError(str(exc)) from None
         object.__setattr__(self, "cost_components", tuple(self.cost_components))
         if self.cost_components:
             try:
@@ -345,6 +375,9 @@ def route_result_to_rows(result: RouteResult) -> list[dict[str, Any]]:
                 "cost_rule_version": segment.cost_rule_version,
                 "calculation_detail": segment.calculation_detail,
                 "data_source": segment.data_source,
+                "transport_stage": segment.transport_stage,
+                "edge_role": segment.edge_role,
+                "time_scope": segment.time_scope,
             }
         )
     return rows
@@ -407,6 +440,9 @@ def _build_segment(
         cost_rule_version=_required_attribute(attributes, "cost_rule_version", step.edge_key),
         calculation_detail=_required_attribute(attributes, "calculation_detail", step.edge_key),
         data_source=_required_attribute(attributes, "data_source", step.edge_key),
+        transport_stage=attributes.get("transport_stage"),
+        edge_role=attributes.get("edge_role"),
+        time_scope=attributes.get("time_scope"),
         cost_components=tuple(attributes.get("cost_components") or ()),
     )
 

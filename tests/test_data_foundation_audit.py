@@ -56,6 +56,10 @@ def test_write_audit_outputs_creates_markdown_json_and_csv(tmp_path):
     assert (tmp_path / "output" / "data_foundation_request_profiles.csv").exists()
     assert (tmp_path / "output" / "data_foundation_bulk_workbook_columns.csv").exists()
     assert (tmp_path / "output" / "data_foundation_port_capabilities.csv").exists()
+    capability_header = (
+        tmp_path / "output" / "data_foundation_port_capabilities.csv"
+    ).read_text(encoding="utf-8-sig").splitlines()[0]
+    assert "is_transfer_port" in capability_header.split(",")
     assert (tmp_path / "output" / "data_foundation_region_mappings.csv").exists()
     assert (
         tmp_path / "output" / "data_foundation_operation_fee_region_assignments.csv"

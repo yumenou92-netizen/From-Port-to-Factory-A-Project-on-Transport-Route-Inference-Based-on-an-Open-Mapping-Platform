@@ -114,6 +114,7 @@ class RoadRouteResult:
     raw_duration_minutes: int | None = None
     toll_yuan: Decimal | None = None
     route_tags: tuple[str, ...] = ()
+    polyline_points: tuple[GeoPoint, ...] = ()
 
     def __post_init__(self) -> None:
         if self.status not in {"resolved", "manual_review"}:
