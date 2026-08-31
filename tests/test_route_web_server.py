@@ -16,7 +16,9 @@ from src.web.server import (
     STATIC_DIR,
     RouteWebContext,
     _serialize_segment_geometry,
+    parse_rail_freight_calculator_request,
     parse_route_web_request,
+    serialize_rail_freight_calculator_result,
 )
 
 
@@ -68,6 +70,26 @@ def test_web_request_rejects_not_yet_connected_trunk_transport_mode():
                 "commodity": "玉米",
             }
         )
+
+
+def test_rail_freight_calculator_api_contract_is_separate_from_route_planning():
+    values = parse_rail_freight_calculator_request(
+        {
+            "loadTons": "60",
+            "totalFreightYuan": "1691.1",
+            "discountRatio": "0.12",
+            "electrifiedKm": "500",
+            "localFreight2AdjustedBaseYuan": "100",
+        }
+    )
+
+    serialized = serialize_rail_freight_calculator_result(values)
+
+    assert serialized["scope"] == "workbook_reproduction_only"
+    assert serialized["totals"]["adjustedTotalYuan"]
+    assert next(
+        line for line in serialized["lines"] if line["name"] == "地方运费2"
+    )["adjustedYuan"] == "88.00"
 
 
 def test_web_context_passes_parsed_application_request_through_service(monkeypatch):
@@ -138,6 +160,18 @@ def test_web_result_visibility_honors_hidden_attribute():
 
     assert "[hidden]" in css
     assert "display: none !important" in css
+
+
+def test_web_exposes_separate_railway_quotation_calculator_without_changing_route_api():
+    index = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    calculator = (STATIC_DIR / "rail_calculator.html").read_text(encoding="utf-8")
+    calculator_javascript = (STATIC_DIR / "rail_calculator.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'href="/rail_calculator.html"' in index
+    assert "不自动写入铁路 OD 运价" in calculator
+    assert 'fetch("/api/rail-freight-calculator"' in calculator_javascript
 
 
 def test_web_serializes_tencent_driving_polyline_for_truck_segment():

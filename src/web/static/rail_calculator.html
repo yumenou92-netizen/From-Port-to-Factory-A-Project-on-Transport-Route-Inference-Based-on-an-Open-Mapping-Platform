@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="铁路运费报价试算工具" />
+    <title>铁路运费计算器｜运输路径规划系统</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell calculator-shell">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">COFCO TRADE (Shenzhen) · SCM · TSM</p>
+          <h1>铁路运费计算器</h1>
+          <p class="subhead">报价试算与人工核对工具｜不自动写入铁路 OD 运价，也不参与路径搜索</p>
+        </div>
+        <div class="masthead-actions">
+          <a class="header-link" href="/">返回路径规划</a>
+          <div class="system-status" aria-live="polite">
+            <span class="status-dot" id="serviceDot"></span>
+            <span id="serviceStatus">正在连接本地计算器</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="calculator-workspace">
+        <aside class="control-rail calculator-controls" aria-label="铁路报价输入">
+          <form id="calculatorForm">
+            <section class="form-section">
+              <div class="section-number">01</div>
+              <div>
+                <h2>核心参数</h2>
+                <p>对应“计算器.xlsx”的黄色输入项；金额单位均为元。</p>
+              </div>
+              <div class="field-pair">
+                <label><span>整车装载吨数</span><input name="loadTons" type="number" min="0.01" step="0.01" value="60" required /></label>
+                <label><span>下浮率</span><input name="discountRatio" type="number" min="0" max="0.9999" step="0.0001" value="0.12" required /></label>
+              </div>
+              <div class="field-pair">
+                <label><span>运费</span><input name="totalFreightYuan" type="number" min="0" step="0.01" value="1691.1" required /></label>
+                <label><span>电气化里程</span><input name="electrifiedKm" type="number" min="0" step="0.01" value="500" required /></label>
+              </div>
+              <label><span>印花税</span><input name="stampTaxYuan" type="number" min="0" step="0.01" value="0.5" /></label>
+              <label><span>京九分流</span><input name="jingjiuDiversionYuan" type="number" min="0" step="0.01" value="0" /></label>
+            </section>
+
+            <section class="form-section order-section">
+              <div class="section-number">02</div>
+              <div>
+                <h2>原表人工维护项</h2>
+                <p>这些金额在原表中并非由“全价”列自动推导；填写的是对应折算列的基数或下浮后金额。</p>
+              </div>
+              <div class="field-pair">
+                <label><span>铁建基金折算基数</span><input name="railConstructionFundAdjustedBaseYuan" type="number" min="0" step="0.01" value="0" /></label>
+                <label><span>地方运费1折算基数</span><input name="localFreight1AdjustedBaseYuan" type="number" min="0" step="0.01" value="0" /></label>
+              </div>
+              <label><span>地方运费2折算基数 <em>按下浮率折算</em></span><input name="localFreight2AdjustedBaseYuan" type="number" min="0" step="0.01" value="0" /></label>
+              <div class="field-pair">
+                <label><span>发站装卸费（下浮后）</span><input name="originHandlingAdjustedYuan" type="number" min="0" step="0.01" value="0" /></label>
+                <label><span>到站装卸费（下浮后）</span><input name="destinationHandlingAdjustedYuan" type="number" min="0" step="0.01" value="0" /></label>
+              </div>
+              <div class="field-pair">
+                <label><span>取送车费（下浮后）</span><input name="pickupDeliveryAdjustedYuan" type="number" min="0" step="0.01" value="0" /></label>
+                <label><span>其他费（下浮后）</span><input name="otherAdjustedYuan" type="number" min="0" step="0.01" value="0" /></label>
+              </div>
+            </section>
+            <div class="calculator-actions">
+              <button class="run-button" type="submit"><span>计算铁路报价</span><span aria-hidden="true">↗</span></button>
+              <button id="resetButton" class="secondary-button" type="reset">恢复原表默认值</button>
+            </div>
+          </form>
+        </aside>
+
+        <section class="calculator-stage" aria-live="polite">
+          <div class="results-heading calculator-heading">
+            <div>
+              <p class="eyebrow">QUOTE CHECK</p>
+              <h2>计算结果</h2>
+            </div>
+            <span id="calculationStatus" class="calculator-status">待计算</span>
+          </div>
+          <div id="calculatorEmpty" class="empty-state">
+            <strong>等待报价参数</strong>
+            <span>填写参数后可查看全价、下浮后报价和每吨折合金额。</span>
+          </div>
+          <div id="calculatorResult" hidden>
+            <section class="calculator-summary" aria-label="报价汇总">
+              <article><span>原表全价合计</span><strong id="fullPriceTotal">—</strong><small>按原表合计列口径</small></article>
+              <article class="summary-primary"><span>下浮后报价</span><strong id="adjustedTotal">—</strong><small>当前试算总额</small></article>
+              <article><span>折合单吨价</span><strong id="inputLoadUnitPrice">—</strong><small>按本次装载吨数</small></article>
+              <article><span>原表固定 60 吨单价</span><strong id="workbookUnitPrice">—</strong><small>仅作对照</small></article>
+            </section>
+            <section class="calculator-table-wrap">
+              <table class="calculator-table">
+                <thead><tr><th>费用项目</th><th>全价</th><th>除以 0.991</th><th>除以 0.9911</th><th>按原表下浮折算</th><th>说明</th></tr></thead>
+                <tbody id="calculatorLineItems"></tbody>
+              </table>
+            </section>
+            <aside class="calculator-warning" aria-label="计算边界"><h3>使用边界</h3><ul id="calculatorWarnings"></ul></aside>
+          </div>
+          <div id="calculatorError" class="calculator-error" hidden></div>
+        </section>
+      </main>
+    </div>
+    <script src="/rail_calculator.js" defer></script>
+  </body>
+</html>

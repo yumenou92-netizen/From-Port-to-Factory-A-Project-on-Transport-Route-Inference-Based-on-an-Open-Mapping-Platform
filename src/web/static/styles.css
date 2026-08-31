@@ -138,6 +138,29 @@ h1 {
   font-size: 0.8rem;
 }
 
+.masthead-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.header-link {
+  padding: 7px 10px;
+  color: var(--ink-subtle);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background 150ms, color 150ms;
+}
+
+.header-link:hover,
+.header-link:focus-visible {
+  color: #fff;
+  background: var(--accent);
+}
+
 .status-dot {
   width: 7px;
   height: 7px;
@@ -296,6 +319,19 @@ select:focus {
   opacity: 0.5;
   transform: none;
 }
+
+.secondary-button {
+  width: 100%;
+  min-height: 38px;
+  color: var(--ink-subtle);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.secondary-button:hover { background: var(--accent-wash); }
 
 /* ── Map Stage ────────────────────────── */
 
@@ -746,6 +782,78 @@ select:focus {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12), var(--shadow);
 }
 
+/* ── Railway quotation calculator ─────── */
+
+.calculator-workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 360px) minmax(0, 1fr);
+  gap: 16px;
+  padding-top: 20px;
+}
+
+.calculator-controls { align-self: start; }
+
+.calculator-actions {
+  display: grid;
+  gap: 9px;
+}
+
+.calculator-stage {
+  min-width: 0;
+  padding: 22px;
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.calculator-heading { margin-bottom: 20px; }
+
+.calculator-status {
+  padding: 3px 8px;
+  color: var(--muted);
+  background: var(--accent-wash);
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+}
+
+.calculator-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.calculator-summary article {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.calculator-summary article.summary-primary { border-top: 3px solid var(--ink); }
+.calculator-summary span,
+.calculator-summary small { color: var(--muted); font-size: 0.69rem; }
+.calculator-summary strong { font-size: 1.25rem; letter-spacing: -0.03em; word-break: break-word; }
+
+.calculator-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+
+.calculator-table { width: 100%; min-width: 820px; border-collapse: collapse; font-size: 0.76rem; }
+.calculator-table th { padding: 10px; color: var(--ink-subtle); background: var(--accent-wash); border-bottom: 1px solid var(--line); font-size: 0.68rem; font-weight: 700; text-align: left; white-space: nowrap; }
+.calculator-table td { padding: 10px; color: var(--ink-subtle); border-bottom: 1px solid var(--line); vertical-align: top; }
+.calculator-table tr:last-child td { border-bottom: 0; }
+.calculator-table td:first-child { color: var(--ink); font-weight: 600; }
+.calculator-table td.numeric { color: var(--ink); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.calculator-warning,
+.calculator-error { margin-top: 16px; padding: 13px 15px; border-left: 3px solid #e6a817; background: #fffdf5; }
+.calculator-warning h3 { margin: 0 0 7px; font-size: 0.82rem; }
+.calculator-warning ul { display: grid; gap: 5px; margin: 0; padding-left: 18px; color: var(--ink-subtle); font-size: 0.74rem; }
+.calculator-error { color: var(--danger); border-left-color: var(--danger); background: #fff8f7; }
+
 .route-card {
   cursor: pointer;
 }
@@ -966,6 +1074,10 @@ select:focus {
     grid-row: auto;
   }
 
+  .calculator-workspace { grid-template-columns: 1fr; }
+
+  .calculator-controls form { grid-template-columns: 1fr 1fr; }
+
   .control-rail form {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -995,6 +1107,11 @@ select:focus {
     align-items: flex-start;
     flex-direction: column;
   }
+
+  .masthead-actions { align-items: flex-start; flex-direction: column; gap: 8px; }
+
+  .calculator-controls form,
+  .calculator-summary { grid-template-columns: 1fr; }
 
   .control-rail form {
     grid-template-columns: 1fr;

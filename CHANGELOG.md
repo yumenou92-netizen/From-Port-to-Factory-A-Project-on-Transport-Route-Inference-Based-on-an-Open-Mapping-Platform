@@ -2,6 +2,28 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-08-31
+
+### Changed
+
+- Added a separate Web railway quotation calculator at
+  `/rail_calculator.html`, linked from the route-planning page. It mirrors the
+  supplied calculator workbook's auditable cost columns and accepts its core
+  quotation inputs plus explicitly manual-maintained line items.
+- Added a Decimal-backed `/api/rail-freight-calculator` endpoint and an
+  isolated domain calculator. Neither reads nor writes the formal railway OD
+  rate source, creates a `TransportEdge`, or changes candidates, graph edges,
+  costs, times, or Dijkstra results.
+- Corrected local freight 2 per business confirmation to
+  `adjusted_base × (1 - discount_ratio)`. The original fixed 60-tonne display
+  remains visible only as a comparison against the current input load tonnes.
+
+### Verification
+
+- Calculator/domain and Web-adapter focused tests passed; a local Web pass
+  loaded the calculator, completed the workbook default calculation, displayed
+  the corrected local-freight rule, and reported no browser console errors.
+
 ## 2026-08-12
 
 ### Changed

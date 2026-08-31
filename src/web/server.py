@@ -31,6 +31,11 @@ from src.demos.leader_full_flow import (
 )
 from src.dev.runtime_env import RuntimeEnvError, load_runtime_env
 from src.domain.route_request import RouteRequest, RouteRequestError
+from src.domain.rail_freight_calculator import (
+    RailFreightCalculatorError,
+    RailFreightCalculatorInput,
+    calculate_rail_freight_workbook,
+)
 from src.geo.coordinate_provider import LocalFirstCoordinateProvider
 from src.geo.tencent_map_provider import (
     TencentMapCoordinateProvider,
@@ -141,7 +146,8 @@ class RouteWebHandler(BaseHTTPRequestHandler):
         self._serve_static(path)
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/route":
+        path = urlparse(self.path).path
+        if path not in {"/api/route", "/api/rail-freight-calculator"}:
             self._send_json(
                 {"error": "接口不存在。"},
                 status=HTTPStatus.NOT_FOUND,
@@ -164,12 +170,18 @@ class RouteWebHandler(BaseHTTPRequestHandler):
             payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
             if not isinstance(payload, dict):
                 raise ValueError("请求体必须是 JSON 对象。")
-            result = self.context.calculate(payload)
+            if path == "/api/route":
+                result = self.context.calculate(payload)
+            else:
+                result = serialize_rail_freight_calculator_result(
+                    parse_rail_freight_calculator_request(payload)
+                )
         except (
             UnicodeDecodeError,
             json.JSONDecodeError,
             ValueError,
             RouteRequestError,
+            RailFreightCalculatorError,
             FullFlowDemoError,
             TencentMapProviderError,
             DataLoadError,
@@ -271,6 +283,64 @@ def parse_route_web_request(payload: dict[str, Any]) -> RoutePlanningRequest:
         region=region,
         request=request,
     )
+
+
+def parse_rail_freight_calculator_request(
+    payload: dict[str, Any],
+) -> RailFreightCalculatorInput:
+    """Parse calculator inputs without allowing implicit defaults from routing."""
+
+    return RailFreightCalculatorInput(
+        load_tons=_required_decimal(payload.get("loadTons"), "整车装载吨数"),
+        total_freight_yuan=_required_decimal(payload.get("totalFreightYuan"), "运费"),
+        discount_ratio=_required_decimal(payload.get("discountRatio"), "下浮率"),
+        electrified_km=_required_decimal(payload.get("electrifiedKm"), "电气化里程"),
+        stamp_tax_yuan=_optional_decimal(payload.get("stampTaxYuan"), Decimal("0.5"), "印花税"),
+        jingjiu_diversion_yuan=_optional_decimal(payload.get("jingjiuDiversionYuan"), Decimal("0"), "京九分流"),
+        rail_construction_fund_adjusted_base_yuan=_optional_decimal(payload.get("railConstructionFundAdjustedBaseYuan"), Decimal("0"), "铁建基金折算基数"),
+        local_freight_1_adjusted_base_yuan=_optional_decimal(payload.get("localFreight1AdjustedBaseYuan"), Decimal("0"), "地方运费1折算基数"),
+        local_freight_2_adjusted_base_yuan=_optional_decimal(payload.get("localFreight2AdjustedBaseYuan"), Decimal("0"), "地方运费2折算基数"),
+        origin_handling_adjusted_yuan=_optional_decimal(payload.get("originHandlingAdjustedYuan"), Decimal("0"), "发站装卸费"),
+        destination_handling_adjusted_yuan=_optional_decimal(payload.get("destinationHandlingAdjustedYuan"), Decimal("0"), "到站装卸费"),
+        pickup_delivery_adjusted_yuan=_optional_decimal(payload.get("pickupDeliveryAdjustedYuan"), Decimal("0"), "取送车费"),
+        other_adjusted_yuan=_optional_decimal(payload.get("otherAdjustedYuan"), Decimal("0"), "其他费"),
+    )
+
+
+def serialize_rail_freight_calculator_result(
+    values: RailFreightCalculatorInput,
+) -> dict[str, Any]:
+    """Return a calculator-only result; it is never a route-planning result."""
+
+    result = calculate_rail_freight_workbook(values)
+    return {
+        "status": "resolved",
+        "scope": "workbook_reproduction_only",
+        "inputs": {
+            "loadTons": str(values.load_tons),
+            "totalFreightYuan": str(values.total_freight_yuan),
+            "discountRatio": str(values.discount_ratio),
+            "electrifiedKm": str(values.electrified_km),
+        },
+        "lines": [
+            {
+                "name": line.name,
+                "fullPriceYuan": _decimal_text(line.full_price_yuan),
+                "dividedBy0991Yuan": _decimal_text(line.divided_by_0991_yuan),
+                "dividedBy09911Yuan": _decimal_text(line.divided_by_09911_yuan),
+                "adjustedYuan": _decimal_text(line.adjusted_yuan),
+                "note": line.note,
+            }
+            for line in result.lines
+        ],
+        "totals": {
+            "fullPriceTotalYuan": str(result.full_price_total_yuan),
+            "adjustedTotalYuan": str(result.adjusted_total_yuan),
+            "originalWorkbookUnitPriceYuanPerTon": str(result.original_workbook_unit_price_yuan_per_ton),
+            "inputLoadUnitPriceYuanPerTon": str(result.input_load_unit_price_yuan_per_ton),
+        },
+        "warnings": list(result.warnings),
+    }
 
 
 def serialize_full_flow_result(
@@ -624,6 +694,27 @@ def _optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _required_decimal(value: object, field_name: str) -> Decimal:
+    text = _required_text(value, field_name)
+    try:
+        return Decimal(text)
+    except Exception:
+        raise ValueError(f"{field_name}必须是数值。") from None
+
+
+def _optional_decimal(value: object, default: Decimal, field_name: str) -> Decimal:
+    if value is None or str(value).strip() == "":
+        return default
+    try:
+        return Decimal(str(value).strip())
+    except Exception:
+        raise ValueError(f"{field_name}必须是数值。") from None
+
+
+def _decimal_text(value: Decimal | None) -> str | None:
+    return str(value) if value is not None else None
 
 
 def _safe_int(value: object) -> int | None:

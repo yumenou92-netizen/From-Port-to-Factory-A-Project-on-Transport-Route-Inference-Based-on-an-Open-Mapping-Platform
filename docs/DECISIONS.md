@@ -1636,18 +1636,87 @@ CLI、Web 或真实数据链默认加载。铁路运费、上/下站费、专用
 已确认的铁路干线区域时效为东北至福建 168 小时、东北至广东 192 小时、东北至
 广西 192 小时；均表示完整铁路运输段总时效。区域无法唯一映射时不得猜测或构边。
 
-铁路末端直达汽运允许使用独立于既有通用集装箱汽运的规则：0—10km 为 450 元/箱，
+铁路末端直达汽运使用独立于既有通用集装箱汽运的规则：0—10km 为 450 元/箱，
 10—20km 为 500 元/箱，超过 20km 为
-`500 + 30 × 0.6 × (X - 20)` 元/箱。该规则尚未接入正式 Provider，且不得覆盖既有
-通用集装箱汽运的 `0.55` 系数。
+`500 + 30 × 0.6 × (X - 20)` 元/箱。该规则已由隔离的铁路末端 Provider 实现，
+且不得覆盖既有通用集装箱汽运的 `0.55` 系数。
 
 Implications:
 
 - 铁路箱型必须单列为 `顶开门箱` 或 `敞顶箱`，不得与包装方式 `集装箱` 混用；
 - 敞顶箱篷布费为 25 元/箱，顶开门箱不计该项；
 - 上站费、下站费当前尚未确认统一或站点维护口径，未知不得按 195 元/箱默认计入；
+- 南站至客户工厂的末端方案可为直达拖车、客户专用线或第三方专用线中转。客户
+  专用线形成一条铁路 `delivery` 边；第三方专用线必须显式保留“南站至第三方”的
+  `transfer` 边和“第三方至客户”的 `delivery` 边，不能压缩为不可追溯的单边；
+- 末端方案 Provider 仅消费同时具备订单适用范围、费用、完整时效和来源的唯一记录。
+  当前测试占位记录不进入 CLI、Web 或正式图，真实维护数据缺失仍为 `manual_review`；
 - `箱` 与 `柜` 继续严格区分，铁路首轮只支持 `集装箱/箱`；
 - 铁路站是合法铁路端点，不是海港南港，不适用海港准入、散船、港口作业费或水运规则。
 - The rule is implemented in `latest_rate_selector`; all consumers, including
   last-mile truck, exact-OD barge, and future container providers, receive the
   same deterministic selection result.
+
+## D-061: Railway Control-Point Graph Is a Web-Display Source, Not a Model Topology Source
+
+Date: 2026-08-25
+
+Decision:
+
+`data_REAL/fee_switch/运输线路控制点_2026-08-26 完全补充版.csv` is the confirmed
+latest Web-display source at the same data-governance level as the maintained
+bulk-shipping control-point graph. It contains the maintained rail route
+geometry used to draw north-station-to-south-station routes in WebUI.
+
+The railway control-point source does not define the routing model. The route
+instance key is the pair `route_id + route_name`; `point_order` defines the
+ordered controls within that instance. The raw control-point name must be
+retained alongside the normalized station name and binding status.
+
+Implications:
+
+- The source is only for WebUI route drawing, display-path selection and
+  display-side connectivity checks. It does not enter fees, times, candidates,
+  `TransportEdge`, the formal graph, or business admission.
+- The display target is that any north-station-to-south-station OD should use
+  maintained lines wherever possible. A gap in the maintained control graph may
+  use only an explicit `display_gap_pending_confirmation` connector; it must
+  never be presented as a real railway business edge.
+- Missing, ambiguous or unmatched names cannot be silently merged merely
+  because they look geographically or textually similar.
+- Station names are normalized with a `站` suffix where appropriate, while the
+  source name is retained for auditability.
+- Unmatched control points remain review items and cannot be silently merged.
+  They do not block a completed Web-display connectivity audit when the
+  maintained display graph already connects every active north-station and
+  south-station endpoint; they never block a railway model edge, because the
+  control-point graph cannot create one in the first place.
+
+## D-062: Railway Quotation Calculator Is a Separate Business Tool
+
+Date: 2026-08-31
+
+Decision:
+
+The Web railway quotation calculator reproduces the supplied business workbook
+for manual quotation review. Its output is not a formal railway OD rate: it
+does not create or update a rate record, does not create a `TransportEdge`, and
+does not participate in candidates, graph construction, or either shortest-path
+search.
+
+The calculator uses the confirmed correction for local freight 2:
+`adjusted_base × (1 - discount_ratio)`. This supersedes the source workbook's
+erroneous reference to electrified kilometres. The workbook's fixed 60-tonne
+unit-price display remains only as a transparent comparison; the calculator
+also shows total price divided by the current input load tonnes.
+
+Implications:
+
+- A calculator result becomes a formal railway price only after a business
+  maintainer writes an approved, scoped and traceable record to the railway OD
+  rate source.
+- No calculator field is allowed to silently supply missing real data to the
+  railway routing Provider.
+- Other manual-maintenance columns in the workbook remain explicit inputs;
+  the calculator must not invent a derivation that the source workbook does
+  not define.

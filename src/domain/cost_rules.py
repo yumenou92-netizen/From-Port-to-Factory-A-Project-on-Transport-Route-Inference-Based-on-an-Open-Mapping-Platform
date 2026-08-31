@@ -204,6 +204,27 @@ UNKNOWN_TRUCK_CONTAINER_RULE = CostRuleConfig(
 )
 
 
+RAIL_CONTAINER_DELIVERY_TRUCK_RULE = CostRuleConfig(
+    rule_id="rail_container_delivery_truck_distance",
+    rule_version="0.1",
+    rule_name="铁路集装箱南站至客户直达拖车计费",
+    rule_type="distance_tier",
+    enabled=True,
+    parameters={
+        "requires_distance_provider": True,
+        "distance_unit": "km",
+        "price_unit": "元/箱",
+        "segments": (
+            {"max_km": Decimal("10"), "unit_price_yuan_per_box": Decimal("450")},
+            {"max_km": Decimal("20"), "unit_price_yuan_per_box": Decimal("500")},
+            {"max_km": None, "formula": "500 + (distance_km - 20) * 30 * 0.6"},
+        ),
+        "unit_conversion_status": "box_only_do_not_convert_to_ton",
+        "accepted_distance_sources": ("confirmed_geo_provider", "tencent_map_driving_route"),
+    },
+)
+
+
 DEFAULT_COST_RULES = (
     FREIGHT_RATE_UNIT_PRICE_RULE,
     FREIGHT_RATE_TOTAL_PRICE_RULE,
@@ -214,6 +235,7 @@ DEFAULT_COST_RULES = (
     BULK_SHIPPING_MANUAL_VALIDATION_RULE,
     UNKNOWN_TRUCK_BULK_RULE,
     UNKNOWN_TRUCK_CONTAINER_RULE,
+    RAIL_CONTAINER_DELIVERY_TRUCK_RULE,
 )
 
 
@@ -730,6 +752,18 @@ def calculate_unknown_truck_container_unit_price(
     if distance <= Decimal("20"):
         return Decimal("500")
     return Decimal("500") + (distance - Decimal("20")) * Decimal("30") * Decimal("0.55")
+
+
+def calculate_rail_container_delivery_truck_unit_price(
+    distance_km: int | float | str | Decimal,
+) -> Decimal:
+    """Return the confirmed rail-terminal direct-truck unit price in yuan per box."""
+    distance = _positive_decimal(distance_km, "铁路末端直达拖车距离")
+    if distance <= Decimal("10"):
+        return Decimal("450")
+    if distance <= Decimal("20"):
+        return Decimal("500")
+    return Decimal("500") + (distance - Decimal("20")) * Decimal("30") * Decimal("0.6")
 
 
 def _truck_review_result(
