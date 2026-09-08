@@ -31,8 +31,8 @@ class RailFreightCalculatorInput:
     stamp_tax_yuan: Decimal = Decimal("0.5")
     jingjiu_diversion_yuan: Decimal = Decimal("0")
     rail_construction_fund_adjusted_base_yuan: Decimal = Decimal("0")
-    local_freight_1_adjusted_base_yuan: Decimal = Decimal("0")
-    local_freight_2_adjusted_base_yuan: Decimal = Decimal("0")
+    # 地方运费为可增删的动态项，每项仅一个折算基数（按下浮率折算）
+    local_freight_adjusted_bases: tuple[Decimal, ...] = ()
     origin_handling_adjusted_yuan: Decimal = Decimal("0")
     destination_handling_adjusted_yuan: Decimal = Decimal("0")
     pickup_delivery_adjusted_yuan: Decimal = Decimal("0")
@@ -50,14 +50,20 @@ class RailFreightCalculatorInput:
             ("stamp_tax_yuan", "印花税"),
             ("jingjiu_diversion_yuan", "京九分流"),
             ("rail_construction_fund_adjusted_base_yuan", "铁建基金折算基数"),
-            ("local_freight_1_adjusted_base_yuan", "地方运费1折算基数"),
-            ("local_freight_2_adjusted_base_yuan", "地方运费2折算基数"),
             ("origin_handling_adjusted_yuan", "发站装卸费"),
             ("destination_handling_adjusted_yuan", "到站装卸费"),
             ("pickup_delivery_adjusted_yuan", "取送车费"),
             ("other_adjusted_yuan", "其他费"),
         ):
             object.__setattr__(self, field_name, _non_negative(getattr(self, field_name), label))
+        object.__setattr__(
+            self,
+            "local_freight_adjusted_bases",
+            tuple(
+                _non_negative(value, f"地方运费第{index}项折算基数")
+                for index, value in enumerate(self.local_freight_adjusted_bases, start=1)
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -76,7 +82,9 @@ class RailFreightCalculatorResult:
 
     lines: tuple[RailFreightCalculatorLine, ...]
     full_price_total_yuan: Decimal
+    user_full_price_total_yuan: Decimal
     adjusted_total_yuan: Decimal
+    local_freight_adjusted_total_yuan: Decimal
     original_workbook_unit_price_yuan_per_ton: Decimal
     input_load_unit_price_yuan_per_ton: Decimal
     warnings: tuple[str, ...]
@@ -122,17 +130,13 @@ def calculate_rail_freight_workbook(
             values.rail_construction_fund_adjusted_base_yuan * discount_factor,
             "原表的 0.9911 折算基数为人工维护值。",
         ),
-        RailFreightCalculatorLine(
-            "地方运费1", None, None,
-            values.local_freight_1_adjusted_base_yuan,
-            values.local_freight_1_adjusted_base_yuan * discount_factor,
-            "原表的 0.9911 折算基数为人工维护值。",
-        ),
-        RailFreightCalculatorLine(
-            "地方运费2", None, None,
-            values.local_freight_2_adjusted_base_yuan,
-            values.local_freight_2_adjusted_base_yuan * discount_factor,
-            "已按业务确认勘误：折算基数 × (1 - 下浮率)。",
+        *(
+            RailFreightCalculatorLine(
+                f"地方运费{index}", None, None, base,
+                base * discount_factor,
+                "已按业务确认勘误：折算基数 × (1 - 下浮率)。",
+            )
+            for index, base in enumerate(values.local_freight_adjusted_bases, start=1)
         ),
         RailFreightCalculatorLine(
             "基础运费", base_freight, base_0991, base_09911,
@@ -163,19 +167,37 @@ def calculate_rail_freight_workbook(
         (line.full_price_yuan or Decimal("0"))
         for line in lines[1:]
     )
+    # 用户口径全价合计：在原表全价合计基础上加入印花税、铁建基金与发站/到站
+    # 装卸费（按截图口径：铁建基金直接以 0.9911 折算基数金额计入，不除以
+    # 0.9911 折算为全价；装卸费以下浮后人工维护金额计入）。
+    # 仍不含取送车费/其他费。
+    user_full_price_total = (
+        full_price_total
+        + values.stamp_tax_yuan
+        + values.rail_construction_fund_adjusted_base_yuan
+        + values.origin_handling_adjusted_yuan
+        + values.destination_handling_adjusted_yuan
+    )
     adjusted_total = sum(
         (line.adjusted_yuan or Decimal("0")) for line in lines
+    )
+    # 地方运费下浮后合计：Σ 折算基数 × (1 - 下浮率)，与上方动态行一致
+    local_freight_adjusted_total = (
+        sum(values.local_freight_adjusted_bases, Decimal("0")) * discount_factor
     )
     return RailFreightCalculatorResult(
         lines=lines,
         full_price_total_yuan=full_price_total,
+        user_full_price_total_yuan=user_full_price_total,
         adjusted_total_yuan=adjusted_total,
+        local_freight_adjusted_total_yuan=local_freight_adjusted_total,
         original_workbook_unit_price_yuan_per_ton=adjusted_total / Decimal("60"),
         input_load_unit_price_yuan_per_ton=adjusted_total / values.load_tons,
         warnings=(
             "本页仅复刻“计算器.xlsx”的报价试算，不构成正式铁路运输边或路径规划结果。",
             "地方运费2已按业务确认勘误：折算基数 × (1 - 下浮率)，覆盖原表错误公式。",
             "原表单吨价固定除以 60 吨；本页同时给出按本次输入装载吨数折算的单吨价。",
+            "“用户全价合计”按截图口径 = 原表全价合计 + 印花税 + 铁建基金 + 发站/到站装卸费。",
         ),
     )
 

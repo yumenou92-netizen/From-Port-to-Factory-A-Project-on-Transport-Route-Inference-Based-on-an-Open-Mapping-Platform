@@ -2,10 +2,51 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-09-02
+
+### Changed
+
+- Added a read-only adapter for the first local railway-container test workbook.
+  It consumes the confirmed `测试路线/敞顶箱-8.28查询` source as railway-only
+  freight in yuan per two-container group, converts it to yuan per box, and
+  emits typed `real_data` records only for uniquely registered standard
+  north-station/south-station OD pairs.
+- Added the confirmed first-batch railway cost components: station handling is
+  195 yuan per box for stations in Shaoguan and 136.5 yuan per box elsewhere;
+  open-top tarpaulin is 250 yuan per box. Storage and detention are excluded
+  from the current order model rather than defaulted to zero.
+- Kept `站转专用线` compound endpoints out of normal south-station trunk
+  records and retained missing north stations as review-only outcomes.
+
+### Verification
+
+- The local source was read without mutation: 101 confirmed-price rows yielded
+  66 typed normal-station records, 34 dedicated-siding outcomes, and one
+  unregistered-north-station outcome.
+
 ## 2026-08-31
 
 ### Changed
 
+- Added a UI-neutral railway-container planning service and a sanitized
+  platform-style CLI fixture.  The service filters exact order-applicable
+  north-station/south-station records, requires a complete terminal delivery
+  record, builds registered `MultiDiGraph` edges, and independently searches
+  cost and time.  It is intentionally isolated from real railway data,
+  full-flow, and the Web route API.
+- Updated the isolated railway-container interactive demo so its direct
+  terminal-truck option reuses local-first coordinates, Tencent place/ordinary
+  driving providers, and the confirmed rail-terminal truck rule.  Railway
+  trunk inputs, station fees, and dedicated-siding inputs remain explicit
+  `demo_placeholder` test data; unavailable coordinate or road data returns
+  `manual_review` without fabricating a delivery edge.
+- Prevented an incomplete railway demo from printing a trunk-only subtotal as
+  a full-chain total; it now prints the terminal `manual_review` reason and
+  labels the available trunk values as a subtotal.
+- Added a narrow railway-demo station shorthand fallback: an unresolved south
+  station name without `站` retries the same name with that suffix before any
+  external-result failure is surfaced; this does not alter generic port or
+  customer name resolution.
 - Added a separate Web railway quotation calculator at
   `/rail_calculator.html`, linked from the route-planning page. It mirrors the
   supplied calculator workbook's auditable cost columns and accepts its core

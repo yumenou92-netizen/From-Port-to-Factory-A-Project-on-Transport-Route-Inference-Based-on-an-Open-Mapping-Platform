@@ -30,6 +30,17 @@
             <section class="form-section">
               <div class="section-number">01</div>
               <div>
+                <h2>运输站点</h2>
+                <p>北方/南方站点必填，客户工厂可选；随计算结果一并记入台账。</p>
+              </div>
+              <label><span>北方站点</span><input name="northStation" type="text" required /></label>
+              <label><span>南方站点</span><input name="southStation" type="text" required /></label>
+              <label><span>客户工厂 <em>可选</em></span><input name="customerFactory" type="text" /></label>
+            </section>
+
+            <section class="form-section">
+              <div class="section-number">02</div>
+              <div>
                 <h2>核心参数</h2>
                 <p>对应“计算器.xlsx”的黄色输入项；金额单位均为元。</p>
               </div>
@@ -46,16 +57,19 @@
             </section>
 
             <section class="form-section order-section">
-              <div class="section-number">02</div>
+              <div class="section-number">03</div>
               <div>
                 <h2>原表人工维护项</h2>
                 <p>这些金额在原表中并非由“全价”列自动推导；填写的是对应折算列的基数或下浮后金额。</p>
               </div>
-              <div class="field-pair">
-                <label><span>铁建基金折算基数</span><input name="railConstructionFundAdjustedBaseYuan" type="number" min="0" step="0.01" value="0" /></label>
-                <label><span>地方运费1折算基数</span><input name="localFreight1AdjustedBaseYuan" type="number" min="0" step="0.01" value="0" /></label>
+              <label><span>铁建基金折算基数</span><input name="railConstructionFundAdjustedBaseYuan" type="number" min="0" step="0.01" value="0" /></label>
+              <div class="local-freight-block">
+                <div class="local-freight-head">
+                  <span class="local-freight-title">地方运费（折算基数）<em>按下浮率折算，可随时增删</em></span>
+                  <button id="addLocalFreightButton" class="mini-button" type="button">＋ 添加地方运费</button>
+                </div>
+                <div id="localFreightRows" class="local-freight-rows"><!-- 动态行由 rail_calculator.js 渲染 --></div>
               </div>
-              <label><span>地方运费2折算基数 <em>按下浮率折算</em></span><input name="localFreight2AdjustedBaseYuan" type="number" min="0" step="0.01" value="0" /></label>
               <div class="field-pair">
                 <label><span>发站装卸费（下浮后）</span><input name="originHandlingAdjustedYuan" type="number" min="0" step="0.01" value="0" /></label>
                 <label><span>到站装卸费（下浮后）</span><input name="destinationHandlingAdjustedYuan" type="number" min="0" step="0.01" value="0" /></label>
@@ -87,6 +101,7 @@
           <div id="calculatorResult" hidden>
             <section class="calculator-summary" aria-label="报价汇总">
               <article><span>原表全价合计</span><strong id="fullPriceTotal">—</strong><small>按原表合计列口径</small></article>
+              <article><span>用户全价合计</span><strong id="userFullPriceTotal">—</strong><small>原表口径 + 印花税 + 铁建基金 + 装卸费</small></article>
               <article class="summary-primary"><span>下浮后报价</span><strong id="adjustedTotal">—</strong><small>当前试算总额</small></article>
               <article><span>折合单吨价</span><strong id="inputLoadUnitPrice">—</strong><small>按本次装载吨数</small></article>
               <article><span>原表固定 60 吨单价</span><strong id="workbookUnitPrice">—</strong><small>仅作对照</small></article>
@@ -102,6 +117,44 @@
           <div id="calculatorError" class="calculator-error" hidden></div>
         </section>
       </main>
+
+      <section class="ledger-section" aria-label="历史台账">
+        <div class="results-heading calculator-heading">
+          <div>
+            <p class="eyebrow">LEDGER</p>
+            <h2>历史台账</h2>
+          </div>
+          <div class="ledger-actions">
+            <button id="exportXlsxButton" class="secondary-button" type="button">导出 Excel</button>
+            <button id="exportCsvButton" class="secondary-button" type="button">导出 CSV</button>
+          </div>
+        </div>
+        <p class="ledger-hint">每次计算自动保存一条记录到 <code>output/铁路运费台账.xlsx</code>；编辑=回填表单重算后覆盖该行，删除=确认后移除该行。</p>
+        <div class="calculator-table-wrap">
+          <table class="calculator-table ledger-table">
+            <thead>
+              <tr>
+                <th>序号</th>
+                <th>保存时间</th>
+                <th>北方站点</th>
+                <th>南方站点</th>
+                <th>客户工厂</th>
+                <th>装载吨数</th>
+                <th>下浮率</th>
+                <th>运费</th>
+                <th>原表全价合计</th>
+                <th>用户全价合计</th>
+                <th>地方运费小计</th>
+                <th>下浮后报价</th>
+                <th>折合单吨价</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="ledgerBody"></tbody>
+          </table>
+        </div>
+        <p id="ledgerEmpty" class="ledger-empty">台账暂无记录，完成一次计算后自动生成。</p>
+      </section>
     </div>
     <script src="/rail_calculator.js" defer></script>
   </body>

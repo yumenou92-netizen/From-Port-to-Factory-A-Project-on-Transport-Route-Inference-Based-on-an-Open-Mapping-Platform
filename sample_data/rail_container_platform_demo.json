@@ -1,0 +1,37 @@
+{
+  "request": {
+    "northStation": "北方测试站",
+    "southStation": null,
+    "customerFactory": "南方测试客户",
+    "quantityBoxes": "10",
+    "quantityUnit": "箱",
+    "packageType": "集装箱",
+    "commodity": "玉米",
+    "tradeType": "内贸",
+    "containerType": "敞顶箱"
+  },
+  "nodes": [
+    {"name": "北方测试站", "longitude": 122.0, "latitude": 46.0},
+    {"name": "经济南站", "longitude": 113.0, "latitude": 23.0},
+    {"name": "快速南站", "longitude": 114.0, "latitude": 24.0},
+    {"name": "南方测试客户", "longitude": 113.1, "latitude": 23.1}
+  ],
+  "trunkRates": [
+    {
+      "northStation": "北方测试站", "southStation": "经济南站", "commodities": ["玉米"], "tradeType": "内贸", "containerType": "敞顶箱",
+      "baseFreightYuanPerBox": "100", "discountRatio": "0", "originStationFeeYuanPerBox": "10", "destinationStationFeeYuanPerBox": "10", "durationHours": "192"
+    },
+    {
+      "northStation": "北方测试站", "southStation": "快速南站", "commodities": ["玉米"], "tradeType": "内贸", "containerType": "敞顶箱",
+      "baseFreightYuanPerBox": "200", "discountRatio": "0", "originStationFeeYuanPerBox": "10", "destinationStationFeeYuanPerBox": "10", "durationHours": "168"
+    }
+  ],
+  "directTruckDeliveries": [
+    {
+      "southStation": "经济南站", "customerFactory": "南方测试客户", "commodities": ["玉米"], "tradeType": "内贸", "containerType": "敞顶箱", "distanceKm": "10", "durationHours": "2"
+    },
+    {
+      "southStation": "快速南站", "customerFactory": "南方测试客户", "commodities": ["玉米"], "tradeType": "内贸", "containerType": "敞顶箱", "distanceKm": "10", "durationHours": "1"
+    }
+  ]
+}

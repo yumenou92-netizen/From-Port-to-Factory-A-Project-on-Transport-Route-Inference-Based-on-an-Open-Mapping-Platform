@@ -1,9 +1,9 @@
 """Rail-container north-to-south trunk contract.
 
 This provider is deliberately isolated from bulk shipping and container-vessel
-providers.  It can build a railway edge from a fully specified record, while
-test/demo records remain visibly labelled ``demo_placeholder``.  No record is
-loaded from local business data in this first slice.
+providers.  It can build a railway edge from a fully specified record. Test
+records remain visibly labelled ``demo_placeholder``; a separate local adapter
+may supply confirmed railway business records as ``real_data``.
 """
 
 from __future__ import annotations
@@ -21,7 +21,8 @@ from src.routing.transport_edge import TransportEdge, build_transport_edge
 
 
 RAIL_CONTAINER_RULE_ID = "rail_container_rate_time"
-RAIL_CONTAINER_RULE_VERSION = "0.1"
+RAIL_CONTAINER_RULE_VERSION = "0.2"
+OPEN_TOP_TARPAULIN_YUAN_PER_BOX = Decimal("250")
 RailContainerSourceType = Literal["real_data", "demo_placeholder"]
 
 
@@ -120,7 +121,7 @@ class RailContainerRateTimeRecord:
 
     @property
     def tarpaulin_yuan_per_box(self) -> Decimal:
-        return Decimal("25") if self.container_type == "敞顶箱" else Decimal("0")
+        return OPEN_TOP_TARPAULIN_YUAN_PER_BOX if self.container_type == "敞顶箱" else Decimal("0")
 
     def supports_request(self, request: RouteRequest) -> bool:
         return (

@@ -11,7 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Sequence
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LOCAL_PACKAGE_DIR = PROJECT_ROOT / ".python_packages"
@@ -52,6 +52,14 @@ from src.web.route_control_points import (
     RouteControlPointNetwork,
     find_route_control_point_file,
     load_route_control_point_network,
+)
+from src.web.rail_ledger import (
+    append_record,
+    delete_record,
+    export_csv,
+    export_xlsx,
+    load_records,
+    update_record,
 )
 
 
@@ -143,11 +151,35 @@ class RouteWebHandler(BaseHTTPRequestHandler):
                 no_store=True,
             )
             return
+        if path == "/api/rail-ledger":
+            self._send_json({"records": load_records()}, no_store=True)
+            return
+        if path == "/api/rail-ledger/export":
+            export_format = (parse_qs(urlparse(self.path).query).get("format") or ["xlsx"])[0]
+            if export_format == "csv":
+                self._send_file(
+                    export_csv(),
+                    "铁路运费台账.csv",
+                    "text/csv; charset=utf-8",
+                )
+            else:
+                self._send_file(
+                    export_xlsx(),
+                    "铁路运费台账.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            return
         self._serve_static(path)
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
-        if path not in {"/api/route", "/api/rail-freight-calculator"}:
+        if path not in {
+            "/api/route",
+            "/api/rail-freight-calculator",
+            "/api/rail-ledger",
+            "/api/rail-ledger/update",
+            "/api/rail-ledger/delete",
+        }:
             self._send_json(
                 {"error": "接口不存在。"},
                 status=HTTPStatus.NOT_FOUND,
@@ -172,10 +204,35 @@ class RouteWebHandler(BaseHTTPRequestHandler):
                 raise ValueError("请求体必须是 JSON 对象。")
             if path == "/api/route":
                 result = self.context.calculate(payload)
-            else:
+            elif path == "/api/rail-freight-calculator":
                 result = serialize_rail_freight_calculator_result(
                     parse_rail_freight_calculator_request(payload)
                 )
+            elif path == "/api/rail-ledger":
+                result = append_record(payload)
+            elif path == "/api/rail-ledger/update":
+                seq = _safe_int(payload.get("seq"))
+                if seq is None:
+                    raise ValueError("缺少台账序号 seq。")
+                record = update_record(seq, payload)
+                if record is None:
+                    self._send_json(
+                        {"error": "台账记录不存在。"},
+                        status=HTTPStatus.NOT_FOUND,
+                    )
+                    return
+                result = record
+            else:
+                seq = _safe_int(payload.get("seq"))
+                if seq is None:
+                    raise ValueError("缺少台账序号 seq。")
+                if not delete_record(seq):
+                    self._send_json(
+                        {"error": "台账记录不存在。"},
+                        status=HTTPStatus.NOT_FOUND,
+                    )
+                    return
+                result = {"ok": True, "seq": seq}
         except (
             UnicodeDecodeError,
             json.JSONDecodeError,
@@ -250,6 +307,25 @@ class RouteWebHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_file(
+        self,
+        body: bytes,
+        filename: str,
+        content_type: str,
+    ) -> None:
+        """以附件下载形式返回文件（中文文件名走 RFC 5987 filename*）。"""
+        encoded = quote(filename)
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header(
+            "Content-Disposition",
+            f"attachment; filename=\"{encoded}\"; filename*=UTF-8''{encoded}",
+        )
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
 
 class RouteWebServer(ThreadingHTTPServer):
     def __init__(
@@ -290,6 +366,17 @@ def parse_rail_freight_calculator_request(
 ) -> RailFreightCalculatorInput:
     """Parse calculator inputs without allowing implicit defaults from routing."""
 
+    local_bases_payload = payload.get("localFreightBases")
+    if local_bases_payload is None:
+        local_freight_bases: tuple[Decimal, ...] = ()
+    elif not isinstance(local_bases_payload, list):
+        raise ValueError("地方运费项 localFreightBases 必须是数组。")
+    else:
+        local_freight_bases = tuple(
+            _optional_decimal(item, Decimal("0"), f"地方运费第{index}项折算基数")
+            for index, item in enumerate(local_bases_payload, start=1)
+        )
+
     return RailFreightCalculatorInput(
         load_tons=_required_decimal(payload.get("loadTons"), "整车装载吨数"),
         total_freight_yuan=_required_decimal(payload.get("totalFreightYuan"), "运费"),
@@ -298,8 +385,7 @@ def parse_rail_freight_calculator_request(
         stamp_tax_yuan=_optional_decimal(payload.get("stampTaxYuan"), Decimal("0.5"), "印花税"),
         jingjiu_diversion_yuan=_optional_decimal(payload.get("jingjiuDiversionYuan"), Decimal("0"), "京九分流"),
         rail_construction_fund_adjusted_base_yuan=_optional_decimal(payload.get("railConstructionFundAdjustedBaseYuan"), Decimal("0"), "铁建基金折算基数"),
-        local_freight_1_adjusted_base_yuan=_optional_decimal(payload.get("localFreight1AdjustedBaseYuan"), Decimal("0"), "地方运费1折算基数"),
-        local_freight_2_adjusted_base_yuan=_optional_decimal(payload.get("localFreight2AdjustedBaseYuan"), Decimal("0"), "地方运费2折算基数"),
+        local_freight_adjusted_bases=local_freight_bases,
         origin_handling_adjusted_yuan=_optional_decimal(payload.get("originHandlingAdjustedYuan"), Decimal("0"), "发站装卸费"),
         destination_handling_adjusted_yuan=_optional_decimal(payload.get("destinationHandlingAdjustedYuan"), Decimal("0"), "到站装卸费"),
         pickup_delivery_adjusted_yuan=_optional_decimal(payload.get("pickupDeliveryAdjustedYuan"), Decimal("0"), "取送车费"),
@@ -335,7 +421,9 @@ def serialize_rail_freight_calculator_result(
         ],
         "totals": {
             "fullPriceTotalYuan": str(result.full_price_total_yuan),
+            "userFullPriceTotalYuan": str(result.user_full_price_total_yuan),
             "adjustedTotalYuan": str(result.adjusted_total_yuan),
+            "localFreightAdjustedTotalYuan": str(result.local_freight_adjusted_total_yuan),
             "originalWorkbookUnitPriceYuanPerTon": str(result.original_workbook_unit_price_yuan_per_ton),
             "inputLoadUnitPriceYuanPerTon": str(result.input_load_unit_price_yuan_per_ton),
         },

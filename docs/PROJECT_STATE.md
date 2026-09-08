@@ -1,6 +1,6 @@
 # PROJECT_STATE.md
 
-Updated: 2026-08-25
+Updated: 2026-09-02
 
 本文件是新线程接手项目时的首要工程状态。内容依据当前代码、Git 工作树、最近提交、2026-07-30 全量开发 smoke、真实数据 smoke、既有 Tencent API 实测、本地 full-flow/Web API 实测、W3/W5 审计和用户确认业务口径整理，不以聊天记录或领导汇报代替工程事实。
 
@@ -33,11 +33,33 @@ Updated: 2026-08-25
 `demo_placeholder` 记录验证，尚未读取真实数据或接入 CLI、Web、`leader_full_flow.py`
 及正式搜索图；缺少费用、时效、来源或唯一匹配时一律 `manual_review`。
 
-为便于有限 OD 的算法核验，另有 `src.demos.rail_container_interactive_demo`。该工具
-只消费终端人工输入，所有生成记录和边均为 `demo_placeholder`；不读取真实台账、不
-调用地图、不挂入 `leader.py` 菜单、不接入 Web/`leader_full_flow.py`/正式图。运行命令为
-`python -B -m src.demos.rail_container_interactive_demo`。它仅验证干线和末端方案的
-费用、时效、单位与边结构，不能作为报价、运力承诺或正式路线推荐。
+为便于有限 OD 的算法核验，另有 `src.demos.rail_container_interactive_demo`。北站—南站
+干线的运价、站点费和时效，以及专用线方案数据仍由人工输入并为 `demo_placeholder`；
+不写入真实台账、不挂入 `leader.py` 菜单、不接入 Web/`leader_full_flow.py`/正式图。
+其中“南站直达客户/自动”复用现有本地优先坐标解析、Tencent 地点检索回退、Tencent
+普通驾车道路距离/时效和确认的铁路末端拖车规则，形成的末端边按实际来源追溯为
+`real_data`。任一坐标或道路结果失败时均返回 `manual_review`，不补零或回退为虚构边。
+运行命令为 `python -B -m src.demos.rail_container_interactive_demo`。该工具仅验证干线和
+末端方案的费用、时效、单位与边结构，不能作为报价、运力承诺或正式路线推荐。
+
+2026-09-02 新增独立的 `src/application/rail_container_planning.py` 与
+`src.demos.rail_container_platform_demo`，用于验证更接近平台调用的链路：用户请求仅提供
+北站、客户、可选南站与订单维度；节点、精确铁路 OD 记录和末端交付记录由独立数据
+快照注入。应用服务会筛选所有订单适用南站、构造完整铁路干线与直达拖车边、通过标准
+节点 `MultiDiGraph` 后独立搜索费用最低和时间最短路线。脱敏夹具已验证两条平行方案
+分别成为费用最低与时间最短；末端数据不完整的南站保留 `manual_review` 而不代理。
+当前夹具仍为 `demo_placeholder`，且未接入 `leader_full_flow.py`、Web 或真实数据源；
+未来数据平台/本地表只需映射为同一类型化数据依赖，不应修改构边或搜索代码。
+
+2026-09-02 已新增 `src/data/rail_test_workbook.py`，只读接入领导提供的第一批
+铁路测试工作簿。`测试路线/敞顶箱-8.28查询` 的金额已按业务确认解释为仅含铁路
+干线运费的 `元/组`，固定 `2 箱/组` 后转换为 `元/箱`；首轮订单范围为内贸、玉米/
+小麦、敞顶箱。北/南站装卸费作为独立费用组成：韶关市站点为 195 元/箱，其余站点
+为 136.5 元/箱；敞顶箱篷布费为 250 元/箱；堆存、延箱当前不计入。以当前确认北/
+南站主数据实际读取，101 条确认价格中 66 条普通站—站 OD 已生成 `real_data`
+`RailContainerRateTimeRecord`，34 条“站转专用线”复合终点未混入普通南站干线边，
+1 条缺北站继续 `manual_review`。该 Adapter 不复制真实工作簿、不改写其内容，且暂未
+接入 full-flow、Web 默认路线接口；专用线末端和客户交付数据仍须单独维护。
 
 目标是读取本地运输业务数据，统一节点、订单、计费单位、费用和时间结构，构造保留平行运输方案的有向图，并分别输出费用最低和时间最短路径及其分段依据。当前属于 Python 原型验证，不是生产调度系统、正式报价系统、数据库服务、前端产品或高并发 API。
 

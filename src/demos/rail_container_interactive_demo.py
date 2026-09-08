@@ -1,8 +1,13 @@
-"""Interactive, isolated railway-container calculation demo.
+"""Interactive railway-container calculation demo.
 
-This module is intentionally not registered in ``src.demos.leader`` and does
-not load local business workbooks, Tencent APIs, WebUI, or the formal route
-pipeline.  Every record created here is labelled ``demo_placeholder``.
+The demo stays outside the formal full-flow pipeline, but deliberately reuses
+the project's common last-mile capability when the terminal plan is direct
+truck delivery: local-node-first coordinate resolution, Tencent ordinary
+driving distance/time, and the confirmed railway terminal truck rule.
+
+Railway trunk prices, station fees, dedicated-siding records, and other
+unmaintained business inputs remain isolated test inputs.  They are always
+labelled ``demo_placeholder`` and are never written back into formal data.
 """
 
 from __future__ import annotations
@@ -11,8 +16,16 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Callable, Literal
 
-from src.data.loaders import make_node_id
+from src.data.loaders import DataLoadError, data_dir_from_env, load_real_data_bundle, make_node_id
+from src.dev.runtime_env import RuntimeEnvError, load_runtime_env
 from src.domain.route_request import RouteRequest
+from src.geo.coordinate_provider import CoordinateProvider, CoordinateResolution, LocalFirstCoordinateProvider
+from src.geo.distance_provider import GeoPoint, RoadRouteProvider, RoadRouteRequest
+from src.geo.tencent_map_provider import (
+    TencentMapCoordinateProvider,
+    TencentMapDrivingRouteProvider,
+    TencentMapProviderError,
+)
 from src.routing.rail_container_provider import RailContainerRateTimeRecord, TableRailContainerProvider
 from src.routing.rail_customer_delivery_provider import (
     CustomerDedicatedSidingRecord,
@@ -26,6 +39,7 @@ from src.routing.transport_edge import TransportEdge
 
 
 TerminalPlanType = Literal["direct_truck", "customer_dedicated_siding", "third_party_dedicated_siding"]
+DirectTruckInputMode = Literal["auto_geo", "manual"]
 
 
 @dataclass(frozen=True)
@@ -43,6 +57,8 @@ class RailContainerDemoInput:
     destination_station_fee_yuan_per_box: Decimal
     trunk_duration_hours: Decimal
     terminal_plan_type: TerminalPlanType
+    direct_truck_input_mode: DirectTruckInputMode = "manual"
+    geo_region: str = "全国"
     terminal_distance_km: Decimal | None = None
     terminal_duration_hours: Decimal | None = None
     terminal_unit_fee_yuan_per_box: Decimal | None = None
@@ -64,6 +80,11 @@ class RailContainerDemoResult:
         return (self.trunk_edge, *self.terminal_result.edges)
 
     @property
+    def is_complete(self) -> bool:
+        """Whether the requested terminal plan formed every required edge."""
+        return self.terminal_result.status == "resolved"
+
+    @property
     def total_cost_yuan(self) -> Decimal:
         return sum((edge.cost_yuan for edge in self.all_edges if edge.cost_yuan is not None), Decimal("0"))
 
@@ -72,8 +93,20 @@ class RailContainerDemoResult:
         return sum((edge.time_hours for edge in self.all_edges if edge.time_hours is not None), Decimal("0"))
 
 
-def build_demo_result(data: RailContainerDemoInput) -> RailContainerDemoResult | RailCustomerDeliveryPlanResult:
-    """Build one manually entered placeholder scenario without using real data."""
+def build_demo_result(
+    data: RailContainerDemoInput,
+    *,
+    coordinate_provider: CoordinateProvider | None = None,
+    local_station_coordinate_provider: CoordinateProvider | None = None,
+    road_route_provider: RoadRouteProvider | None = None,
+) -> RailContainerDemoResult | RailCustomerDeliveryPlanResult:
+    """Build one isolated railway-container scenario.
+
+    The trunk remains a manually supplied ``demo_placeholder``.  In
+    ``auto_geo`` direct-truck mode, only the terminal road segment is built
+    from shared coordinate/road providers; unavailable external results stop
+    that segment in ``manual_review`` rather than falling back to zero.
+    """
     request = RouteRequest(
         quantity=data.quantity_boxes,
         quantity_unit="箱",
@@ -124,8 +157,19 @@ def build_demo_result(data: RailContainerDemoInput) -> RailContainerDemoResult |
             f"演示干线未能构边：{trunk_match.message}",
         )
 
-    terminal_provider = _terminal_provider(data, south_id, customer_id, scope)
     if data.terminal_plan_type == "direct_truck":
+        if data.direct_truck_input_mode == "auto_geo":
+            terminal = _build_auto_geo_direct_truck(
+                data=data,
+                request=request,
+                fallback_south_id=south_id,
+                fallback_customer_id=customer_id,
+                coordinate_provider=coordinate_provider,
+                local_station_coordinate_provider=local_station_coordinate_provider,
+                road_route_provider=road_route_provider,
+            )
+            return RailContainerDemoResult(trunk_edge, terminal)
+        terminal_provider = _terminal_provider(data, south_id, customer_id, scope)
         terminal = terminal_provider.build_direct_truck(
             south_station_name=data.south_station_name,
             customer_name=data.customer_name,
@@ -133,6 +177,7 @@ def build_demo_result(data: RailContainerDemoInput) -> RailContainerDemoResult |
             container_type=data.container_type,
         )
     elif data.terminal_plan_type == "customer_dedicated_siding":
+        terminal_provider = _terminal_provider(data, south_id, customer_id, scope)
         terminal = terminal_provider.build_customer_dedicated_siding(
             south_station_name=data.south_station_name,
             customer_name=data.customer_name,
@@ -140,6 +185,7 @@ def build_demo_result(data: RailContainerDemoInput) -> RailContainerDemoResult |
             container_type=data.container_type,
         )
     else:
+        terminal_provider = _terminal_provider(data, south_id, customer_id, scope)
         terminal = terminal_provider.build_third_party_dedicated_siding(
             south_station_name=data.south_station_name,
             customer_name=data.customer_name,
@@ -147,6 +193,109 @@ def build_demo_result(data: RailContainerDemoInput) -> RailContainerDemoResult |
             container_type=data.container_type,
         )
     return RailContainerDemoResult(trunk_edge, terminal)
+
+
+def _build_auto_geo_direct_truck(
+    *,
+    data: RailContainerDemoInput,
+    request: RouteRequest,
+    fallback_south_id: str,
+    fallback_customer_id: str,
+    coordinate_provider: CoordinateProvider | None,
+    local_station_coordinate_provider: CoordinateProvider | None,
+    road_route_provider: RoadRouteProvider | None,
+) -> RailCustomerDeliveryPlanResult:
+    """Build one direct-truck delivery edge from shared geo services."""
+    if coordinate_provider is None or road_route_provider is None:
+        return RailCustomerDeliveryPlanResult(
+            "direct_truck",
+            "manual_review",
+            "自动末端汽运未配置坐标或道路 Provider；不能将缺失距离、时效补为 0。",
+        )
+    south = _resolve_rail_station_coordinate(
+        fallback_provider=coordinate_provider,
+        local_provider=local_station_coordinate_provider,
+        station_name=data.south_station_name,
+    )
+    customer = coordinate_provider.resolve(data.customer_name)
+    unresolved = [
+        resolution.message
+        for resolution in (south, customer)
+        if not resolution.is_resolved
+    ]
+    if unresolved:
+        return RailCustomerDeliveryPlanResult(
+            "direct_truck",
+            "manual_review",
+            "自动末端汽运未形成：" + "；".join(unresolved),
+        )
+    assert south.longitude is not None and south.latitude is not None
+    assert customer.longitude is not None and customer.latitude is not None
+    route = road_route_provider.get_route(
+        RoadRouteRequest(
+            origin=GeoPoint(Decimal(str(south.longitude)), Decimal(str(south.latitude))),
+            destination=GeoPoint(Decimal(str(customer.longitude)), Decimal(str(customer.latitude))),
+        )
+    )
+    if not route.is_resolved:
+        return RailCustomerDeliveryPlanResult(
+            "direct_truck",
+            "manual_review",
+            f"自动末端汽运未形成：{route.message}",
+        )
+    assert route.distance_km is not None and route.duration_hours is not None
+    scope = RailTerminalScope(
+        commodity_scope=(data.commodity,),
+        trade_type=data.trade_type,
+        container_type=data.container_type,
+        source=(
+            f"南站坐标={south.source}；客户坐标={customer.source}；"
+            f"道路距离与时效={route.source}；铁路末端拖车规则=confirmed"
+        ),
+        source_type="real_data",
+    )
+    provider = RailCustomerDeliveryProvider(
+        direct_truck_records=(
+            DirectTruckDeliveryRecord(
+                data.south_station_name,
+                south.node_id or fallback_south_id,
+                data.customer_name,
+                customer.node_id or fallback_customer_id,
+                scope,
+                route.distance_km,
+                route.source,
+                route.duration_hours,
+                route.source,
+            ),
+        ),
+    )
+    return provider.build_direct_truck(
+        south_station_name=data.south_station_name,
+        customer_name=data.customer_name,
+        request=request,
+        container_type=data.container_type,
+    )
+
+
+def _resolve_rail_station_coordinate(
+    *,
+    fallback_provider: CoordinateProvider,
+    local_provider: CoordinateProvider | None,
+    station_name: str,
+) -> CoordinateResolution:
+    """Resolve a railway-station shorthand without changing generic place rules.
+
+    Railway master data and display control points may respectively include or
+    omit the ``站`` suffix.  Try the entered name first, then the conventional
+    suffix only if it is absent and the first lookup is unresolved.
+    """
+    resolution = (local_provider or fallback_provider).resolve(station_name)
+    if resolution.is_resolved or station_name.endswith("站"):
+        return resolution
+    station_resolution = (local_provider or fallback_provider).resolve(f"{station_name}站")
+    if station_resolution.is_resolved:
+        return station_resolution
+    return fallback_provider.resolve(station_name) if local_provider is not None else resolution
 
 
 def _terminal_provider(
@@ -212,12 +361,18 @@ def _terminal_provider(
 def main(input_func: Callable[[str], str] = input) -> None:
     print("铁路—集装箱交互式试算 Demo（隔离测试版）")
     print("=" * 62)
-    print("所有输入只生成 demo_placeholder 边；不读取真实业务数据，不进入全流程、Web 或正式图。")
-    print("费用与时效请仅填入已人工确认、用于试验的数值。")
+    print("干线试算参数只生成 demo_placeholder 边；不写入正式数据或正式图。")
+    print("末端直达汽运默认复用本地节点、腾讯道路距离/时效和既有铁路拖车规则。")
     try:
         data = _collect_input(input_func)
-        result = build_demo_result(data)
-    except (ValueError, InvalidOperation) as exc:
+        coordinate_provider, local_station_coordinate_provider, road_route_provider = _runtime_geo_providers(data)
+        result = build_demo_result(
+            data,
+            coordinate_provider=coordinate_provider,
+            local_station_coordinate_provider=local_station_coordinate_provider,
+            road_route_provider=road_route_provider,
+        )
+    except (ValueError, InvalidOperation, DataLoadError, RuntimeEnvError, TencentMapProviderError) as exc:
         print(f"\n试算未完成：{exc}")
         return
 
@@ -262,8 +417,21 @@ def _collect_input(input_func: Callable[[str], str]) -> RailContainerDemoInput:
         terminal_plan_type=plan,
     )
     if plan == "direct_truck":
+        input_mode = _ask_choice(
+            input_func,
+            "末端直达汽运数据来源",
+            {"1": "auto_geo", "2": "manual"},
+            "1",
+        )
+        if input_mode == "auto_geo":
+            return RailContainerDemoInput(
+                **common,
+                direct_truck_input_mode="auto_geo",
+                geo_region=_ask_text(input_func, "腾讯地点检索区域", "全国"),
+            )
         return RailContainerDemoInput(
             **common,
+            direct_truck_input_mode="manual",
             terminal_distance_km=_ask_decimal(input_func, "南站至客户确认道路距离（公里）"),
             terminal_duration_hours=_ask_decimal(input_func, "南站至客户驾车时效（小时）"),
         )
@@ -285,7 +453,7 @@ def _collect_input(input_func: Callable[[str], str]) -> RailContainerDemoInput:
 
 
 def _print_result(data: RailContainerDemoInput, result: RailContainerDemoResult) -> None:
-    print("\n试算结果（全部为 demo_placeholder）")
+    print("\n试算结果（干线试算为 demo_placeholder；末端按实际来源分别展示）")
     print("-" * 62)
     print(f"订单：{data.quantity_boxes}箱，{data.container_type}，{data.commodity}，{data.trade_type}")
     for index, edge in enumerate(result.all_edges, start=1):
@@ -295,11 +463,32 @@ def _print_result(data: RailContainerDemoInput, result: RailContainerDemoResult)
             f"角色={edge.edge_role}；规则={edge.cost_rule_id}"
         )
         for component in edge.cost_components:
-            print(f"   - {component.component_type}: {component.amount_yuan}元；来源={component.source_type}")
+            print(f"   - {component.component_type}: {component.amount_yuan}元；来源={component.source_type}；{component.source}")
+    if not result.is_complete:
+        print(f"\n末端方案未构边（{result.terminal_result.status}）：{result.terminal_result.message}")
+        print(f"已构建干线小计：费用={result.trunk_edge.cost_yuan}元；时效={result.trunk_edge.time_hours}小时")
+        print("本次未形成北站—南站—客户的完整链路，不输出全链路总费用、总时效或单箱费用。")
+        return
     print(f"总费用：{result.total_cost_yuan}元")
     print(f"总时效：{result.total_time_hours}小时")
     print(f"折合单箱费用：{result.total_cost_yuan / data.quantity_boxes}元/箱")
-    print("注意：本结果仅用于算法验证，不是报价、运力承诺或正式路线推荐。")
+    print("注意：干线费率、站点费与干线时效仍是试算输入；本结果不是正式报价、运力承诺或正式路线推荐。")
+
+
+def _runtime_geo_providers(
+    data: RailContainerDemoInput,
+) -> tuple[CoordinateProvider | None, CoordinateProvider | None, RoadRouteProvider | None]:
+    """Load common geo services only when auto direct-truck mode asks for them."""
+    if data.terminal_plan_type != "direct_truck" or data.direct_truck_input_mode != "auto_geo":
+        return None, None, None
+    load_runtime_env()
+    bundle = load_real_data_bundle(data_dir_from_env())
+    local_provider = LocalFirstCoordinateProvider(bundle.node_registry)
+    coordinate_provider = LocalFirstCoordinateProvider(
+        bundle.node_registry,
+        fallback_provider=TencentMapCoordinateProvider.from_env(region=data.geo_region),
+    )
+    return coordinate_provider, local_provider, TencentMapDrivingRouteProvider.from_env()
 
 
 def _ask_text(input_func: Callable[[str], str], label: str, default: str | None = None) -> str:

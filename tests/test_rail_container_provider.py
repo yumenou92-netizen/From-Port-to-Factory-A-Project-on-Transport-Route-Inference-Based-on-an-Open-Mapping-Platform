@@ -45,7 +45,7 @@ def test_rail_container_provider_builds_traceable_placeholder_trunk_edge():
     assert edge.transport_stage == "north_to_south"
     assert edge.edge_role == "trunk"
     assert edge.time_hours == Decimal("168")
-    assert edge.cost_yuan == Decimal("2630")
+    assert edge.cost_yuan == Decimal("3080")
     assert edge.data_source.startswith("demo_placeholder:")
     assert edge.time_source.startswith("demo_placeholder:")
     assert [item.component_type for item in edge.cost_components] == [

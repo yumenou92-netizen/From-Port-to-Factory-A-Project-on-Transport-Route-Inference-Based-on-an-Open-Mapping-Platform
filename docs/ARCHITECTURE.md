@@ -127,6 +127,28 @@ flowchart TD
 
 The formal model/search chain is implemented and verified with sanitized demo objects. Real-data `EdgeCandidate` rows now have a conservative bridge into `TransportEdge`: they only become searchable when node IDs and explicit manual shipping time are present.
 
+The railway-container slice now has the same dependency direction in a
+separate application service:
+
+```text
+platform/local data adapter
+-> typed RailContainerRateTimeRecord + terminal delivery records + NodeRegistry
+-> RailContainerPlanningService
+-> TransportEdge (trunk / delivery)
+-> nx.MultiDiGraph
+-> independent cost/time Dijkstra
+-> CLI demo or future Web adapter
+```
+
+The present `rail_container_platform_demo` reads only a sanitized fixture to
+verify that contract. `data/rail_test_workbook.py` is now a separate read-only
+adapter for the first local railway test workbook: it converts its confirmed
+open-top railway-only price from yuan per two-container group to yuan per box,
+adds separately confirmed station-handling/tarpaulin components, and emits
+only standard station-to-station `real_data` records. Compound station-to-
+dedicated-siding endpoints remain outside that normal-station adapter. Neither
+adapter is wired into the existing full-flow or Web route API yet.
+
 ## Next Real-Data Integration Architecture
 
 ```mermaid
