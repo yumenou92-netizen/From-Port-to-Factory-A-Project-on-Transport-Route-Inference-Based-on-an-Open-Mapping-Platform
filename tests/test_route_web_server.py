@@ -18,6 +18,7 @@ from src.web.server import (
     _serialize_segment_geometry,
     parse_rail_freight_calculator_request,
     parse_route_web_request,
+    parse_unified_route_web_request,
     serialize_rail_freight_calculator_result,
 )
 
@@ -55,6 +56,28 @@ def test_web_request_does_not_guess_missing_billing_unit():
                 "commodity": "玉米",
             }
         )
+
+
+def test_unified_web_request_routes_container_order_without_a_mode_selector():
+    parsed = parse_unified_route_web_request(
+        {
+            "origin": "乌兰浩特北",
+            "destination": "客户工厂",
+            "quantity": "500",
+            "quantityUnit": "箱",
+            "packageType": "集装箱",
+            "containerType": "敞顶箱",
+            "transportPreference": "铁路",
+            "commodity": "玉米",
+            "tradeType": "内贸",
+        }
+    )
+
+    assert parsed.northern_location == "乌兰浩特北"
+    assert parsed.request.package_type == "集装箱"
+    assert parsed.request.quantity_unit == "箱"
+    assert parsed.container_type == "敞顶箱"
+    assert parsed.transport_preference == "铁路"
 
 
 def test_web_request_rejects_not_yet_connected_trunk_transport_mode():

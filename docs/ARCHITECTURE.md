@@ -433,7 +433,7 @@ Files:
 
 Responsibilities:
 
-- parse transport and order inputs into the shared `RoutePlanningRequest` application contract;
+- parse north-location/customer/order inputs and the user's high-level `散粮/铁路/混合` scope into the unified application contract; package and unit still decide which Provider families are compatible;
 - expose local health/config/route JSON endpoints without introducing a second pricing or graph implementation;
 - display lowest-cost and fastest-time results, cost components, candidates, warnings, and errors;
 - display the application-provided candidate inclusion/exclusion decisions
@@ -446,6 +446,8 @@ Boundary:
 - bulk and barge overlays remain explicitly schematic where authoritative waterway geometry is unavailable, while truck geometry uses the Tencent road response;
 - the frontend uses the segment's explicit business-stage field rather than assuming that segment number one is always the only north-to-south edge;
 - database, authentication, deployment, concurrency guarantees, and monitoring remain outside the current milestone.
+- `散粮/吨` and `集装箱/箱` are separate comparison universes.  The current Web route adapter dispatches the former to the bulk application service and the latter to the explicitly configured local railway-container data service; it never converts `吨/箱/柜` or supplies a missing rail workbook with calculator/demo values.
+- Railway line geometry remains unavailable to this adapter until the maintained control-point display Provider is connected.  The response explicitly withholds the line instead of drawing a representative straight or schematic railway route.
 
 ## Important Boundaries
 

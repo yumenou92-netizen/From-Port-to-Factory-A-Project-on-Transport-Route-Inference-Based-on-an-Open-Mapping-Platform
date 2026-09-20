@@ -450,6 +450,27 @@ b79db3e  2026-07-22  feat(routing): strengthen full-flow traceability
 
 运行 `python -B -m src.demos.node_coordinate_backfill` 可针对当前订单生成去重清单；加 `--query-tencent` 才会在用户本地查询候选坐标。每个地点先查询原始业务名称，若名称字典存在明确全称/简称对，再把字典全称作为并列查询词；JSONL 的 `query_names` 和 `coordinate_resolutions` 保留全部结果供人工比较。工具不修改 `地点经纬度.json`，也不自动认定别名；若两边已有不同节点 ID，则继续保留人工复核。
 
+## 2026-09-08 铁路集装箱统一入口与本地数据准入
+
+铁路集装箱已从“人工输入试算”推进到可由本地维护表驱动的正式应用链：新增通用 Excel
+表头映射和数据源清单，分别读取站点主数据、北站—南站干线费率、站点费、完整时效以及
+直达拖车/客户专用线/第三方专用线末端记录。准入记录才会构建标准节点校验后的
+`MultiDiGraph` 平行边；费率为元/组时只在维护记录明确两箱一组时换算为元/箱，其他
+单位或范围缺口保持 `manual_review`。
+
+Web 入口以“北方地点 + 客户工厂 + 订单”调用统一服务，并允许用户选择散粮、铁路或
+混合方案范围。散粮与铁路分别约束为 `散粮/吨`、`集装箱/箱`；混合只表示在当前订单
+兼容 Provider 内自动筛选，不跨单位比较。实际铁路本地源必须通过 ignored 的
+`RAIL_CONTAINER_SOURCE_MANIFEST` 显式配置；页面联调可显式设置
+`RAIL_CONTAINER_DEMO_FIXTURE` 使用脱敏夹具，分段来源继续显示 `demo_placeholder`。
+当前集装箱船正式数据尚未接入，因此集装箱订单暂时只会在已准入铁路方案内做费用/时效
+独立搜索。铁路控制点几何尚未接入这一响应适配器，页面明确不画虚构铁路线。
+
+截至本次改动的专项回归为 `22 passed in 0.86s`（统一应用、铁路本地数据、铁路规划和
+Web 服务契约）。最终开发 smoke 全部通过：`511 passed in 2.46s`，real-data smoke
+通过；Tencent 探针在当前进程因 `ConnectionError` 安全返回 `manual_review`，不是实时
+API 成功证据。
+
 ## 12. 明确禁止重新实施或推翻的已确认事项
 
 - 不恢复旧 CSV/`DiGraph` 主链；正式图继续使用 `nx.MultiDiGraph` 和 edge key；

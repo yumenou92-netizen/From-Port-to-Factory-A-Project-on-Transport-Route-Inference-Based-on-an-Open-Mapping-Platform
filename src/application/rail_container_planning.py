@@ -65,6 +65,9 @@ class RailContainerCandidateOutcome:
     south_station_name: str
     status: Literal["included", "manual_review"]
     message: str
+    terminal_plan_type: Literal[
+        "direct_truck", "customer_dedicated_siding", "third_party_dedicated_siding"
+    ] | None = None
 
 
 @dataclass(frozen=True)
@@ -91,11 +94,18 @@ class RailContainerPlanningService:
             missing = "北站" if start is None else "客户工厂"
             raise RailContainerPlanningError(f"平台请求的{missing}未注册为标准节点，不能构建正式图。")
 
+        requested_south = (
+            self.data.node_registry.lookup(request.south_station_name)
+            if request.south_station_name is not None
+            else None
+        )
+        if request.south_station_name is not None and requested_south is None:
+            raise RailContainerPlanningError("平台请求的南站未注册为标准节点，不能构建正式图。")
         candidate_records = [
             record
             for record in self.data.trunk_provider.records
-            if record.north_station_name == request.north_station_name
-            and (request.south_station_name is None or record.south_station_name == request.south_station_name)
+            if record.north_station_node_id == start.node_id
+            and (requested_south is None or record.south_station_node_id == requested_south.node_id)
             and record.container_type == request.container_type
             and record.supports_request(request.request)
         ]
@@ -103,11 +113,12 @@ class RailContainerPlanningService:
             return self._no_candidate_response(request, start.node_id, customer.node_id)
 
         edges: list[TransportEdge] = []
+        added_edge_ids: set[str] = set()
         outcomes: list[RailContainerCandidateOutcome] = []
         warnings: list[str] = []
         for record in candidate_records:
             trunk_edge, trunk_match = self.data.trunk_provider.build_edge(
-                north_station_name=request.north_station_name,
+                north_station_name=record.north_station_name,
                 south_station_name=record.south_station_name,
                 request=request.request,
                 container_type=request.container_type,
@@ -115,20 +126,52 @@ class RailContainerPlanningService:
             if trunk_edge is None:
                 outcomes.append(RailContainerCandidateOutcome(record.south_station_name, "manual_review", trunk_match.message))
                 continue
-            terminal = self.data.terminal_provider.build_direct_truck(
-                south_station_name=record.south_station_name,
-                customer_name=request.customer_name,
-                request=request.request,
-                container_type=request.container_type,
+            terminal_results = (
+                self.data.terminal_provider.build_direct_truck(
+                    south_station_name=record.south_station_name,
+                    customer_name=request.customer_name,
+                    request=request.request,
+                    container_type=request.container_type,
+                ),
+                self.data.terminal_provider.build_customer_dedicated_siding(
+                    south_station_name=record.south_station_name,
+                    customer_name=request.customer_name,
+                    request=request.request,
+                    container_type=request.container_type,
+                ),
+                self.data.terminal_provider.build_third_party_dedicated_siding(
+                    south_station_name=record.south_station_name,
+                    customer_name=request.customer_name,
+                    request=request.request,
+                    container_type=request.container_type,
+                ),
             )
-            if terminal.status != "resolved":
-                outcomes.append(RailContainerCandidateOutcome(record.south_station_name, "manual_review", terminal.message))
-                continue
-            if len(terminal.edges) != 1:
-                outcomes.append(RailContainerCandidateOutcome(record.south_station_name, "manual_review", "直达拖车方案未返回唯一交付边。"))
-                continue
-            edges.extend((trunk_edge, terminal.edges[0]))
-            outcomes.append(RailContainerCandidateOutcome(record.south_station_name, "included", "已构建铁路干线和直达拖车交付边。"))
+            for terminal in terminal_results:
+                if terminal.status != "resolved" or not terminal.edges:
+                    outcomes.append(
+                        RailContainerCandidateOutcome(
+                            record.south_station_name,
+                            "manual_review",
+                            terminal.message,
+                            terminal.plan_type,
+                        )
+                    )
+                    continue
+                if trunk_edge.edge_id not in added_edge_ids:
+                    edges.append(trunk_edge)
+                    added_edge_ids.add(trunk_edge.edge_id)
+                for edge in terminal.edges:
+                    if edge.edge_id not in added_edge_ids:
+                        edges.append(edge)
+                        added_edge_ids.add(edge.edge_id)
+                outcomes.append(
+                    RailContainerCandidateOutcome(
+                        record.south_station_name,
+                        "included",
+                        f"已构建铁路干线和{_terminal_label(terminal.plan_type)}交付边。",
+                        terminal.plan_type,
+                    )
+                )
 
         graph_result = build_transport_multidigraph(edges, node_registry=self.data.node_registry)
         warnings.extend(issue.message for issue in graph_result.issues)
@@ -164,3 +207,11 @@ def _required_text(value: object, field_name: str) -> str:
     if not text:
         raise RailContainerPlanningError(f"{field_name}不能为空。")
     return text
+
+
+def _terminal_label(plan_type: str) -> str:
+    return {
+        "direct_truck": "直达拖车",
+        "customer_dedicated_siding": "客户专用线",
+        "third_party_dedicated_siding": "第三方专用线",
+    }[plan_type]

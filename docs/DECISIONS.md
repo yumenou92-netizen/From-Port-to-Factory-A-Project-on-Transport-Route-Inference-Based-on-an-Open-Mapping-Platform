@@ -1734,3 +1734,34 @@ Implications:
 - Other manual-maintenance columns in the workbook remain explicit inputs;
   the calculator must not invent a derivation that the source workbook does
   not define.
+
+## D-063: One Neutral Route Entry Dispatches by Order Compatibility
+
+Date: 2026-09-08
+
+Decision:
+
+产品路线入口接收北方地点、客户工厂、可选中间节点、订单属性及高层方案范围。
+用户可以选择“散粮”“铁路”或“混合”：前两项分别约束订单为 `散粮/吨`、
+`集装箱/箱`；“混合”表示由订单包装和单位筛选当前所有兼容 Provider，不表示把吨
+与箱强行换算后排序。`吨`、`箱`、`柜` 不自动换算，亦不跨包装方式比较费用。
+
+铁路数据通过显式本地数据源清单读取，干线、站点主数据、上下站费、完整时效和
+末端方案是独立类型记录。只有完整且唯一准入的记录才能生成 `TransportEdge`；
+缺清单、缺字段、单位不一致或末端不完整时返回错误或 `manual_review`，不得回退
+到交互 Demo 输入或占位报价。
+
+Reason:
+
+用户可以表达业务方案偏好，但具体可行运输边仍属于 Provider 和图模型职责。统一
+入口既保留领导确认的 IO 形态，也允许未来把集装箱船等同包装方式的 Provider 加入
+同一轮费用/时效独立搜索。
+
+Implications:
+
+- 当前集装箱正式候选仅限已准入铁路记录；没有北港—南港集装箱船正式费率/时效
+  时，不虚构船运方案。
+- 前端没有独立铁路路线页；方案范围选择只做兼容候选约束，不拥有运价或构边逻辑。
+  现有铁路报价计算器仍是独立的人工试算工具，不进入路线图。
+- 铁路控制点图在接入真实显示路径前不绘制伪造铁路线；它不参与费用、时效或
+  连通性准入。

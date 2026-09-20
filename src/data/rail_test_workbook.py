@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Literal
 
+from src.data.excel_table import ExcelTableSource, LocalExcelTableError, read_excel_table
 from src.data.loaders import NodeRecord, make_node_id
 from src.domain.node_registry import NodeRegistry
 from src.routing.rail_container_provider import RailContainerRateTimeRecord
@@ -84,30 +85,97 @@ def load_confirmed_rail_test_workbook(
 
     workbook_path = Path(path)
     try:
-        from openpyxl import load_workbook
-    except ImportError as exc:  # pragma: no cover - dependency boundary
-        raise RailTestWorkbookError("读取铁路测试工作簿需要本地 openpyxl 依赖。") from exc
-
-    try:
-        workbook = load_workbook(workbook_path, read_only=True, data_only=True)
-    except Exception as exc:
-        raise RailTestWorkbookError(f"{workbook_path.name} 无法作为 Excel 工作簿读取：{exc}") from exc
-    try:
-        required = (TEST_ROUTE_SHEET, NORTH_STATION_SHEET, SOUTH_STATION_SHEET)
-        missing = [name for name in required if name not in workbook.sheetnames]
-        if missing:
-            raise RailTestWorkbookError(
-                f"{workbook_path.name} 缺少工作表：{'、'.join(missing)}"
-            )
-        station_locations = _load_station_locations(workbook)
+        route_rows = read_excel_table(
+            _first_batch_route_source(workbook_path),
+            base_dir=workbook_path.parent,
+            required_fields=("north_station_name", "south_station_name", "railway_freight_yuan_per_group"),
+        )
+        north_rows = read_excel_table(
+            _first_batch_station_source(workbook_path, NORTH_STATION_SHEET),
+            base_dir=workbook_path.parent,
+            required_fields=("station_name", "province", "city"),
+        )
+        south_rows = read_excel_table(
+            _first_batch_station_source(workbook_path, SOUTH_STATION_SHEET),
+            base_dir=workbook_path.parent,
+            required_fields=("station_name", "province", "city"),
+        )
+        station_locations = _station_locations_from_mapped_rows((*north_rows, *south_rows))
         return _build_result(
             source=workbook_path.name,
-            route_rows=workbook[TEST_ROUTE_SHEET].iter_rows(values_only=True),
+            route_rows=_first_batch_route_values(route_rows),
             station_locations=station_locations,
             node_registry=node_registry,
         )
-    finally:
-        workbook.close()
+    except LocalExcelTableError as exc:
+        raise RailTestWorkbookError(str(exc)) from exc
+
+
+def _first_batch_route_source(path: Path) -> ExcelTableSource:
+    return ExcelTableSource(
+        source_id="first_batch_test_trunk_rate",
+        table_type="trunk_rate",
+        workbook=path.name,
+        sheet_name=TEST_ROUTE_SHEET,
+        field_mapping={
+            "north_station_name": ("发站",),
+            "south_station_name": ("到站",),
+            "railway_freight_yuan_per_group": ("敞顶箱-8.28查询",),
+            "customer_1": ("到客户1费用",),
+            "customer_2": ("到客户2费用",),
+        },
+    )
+
+
+def _first_batch_station_source(path: Path, sheet_name: str) -> ExcelTableSource:
+    return ExcelTableSource(
+        source_id=f"first_batch_{sheet_name}",
+        table_type="station_master",
+        workbook=path.name,
+        sheet_name=sheet_name,
+        field_mapping={
+            "station_name": ("节点名称",),
+            "province": ("所在省/自治区/直辖市",),
+            "city": ("所在市",),
+        },
+    )
+
+
+def _first_batch_route_values(rows: tuple[object, ...]) -> tuple[tuple[object, ...], ...]:
+    headers = ("发站", "到站", "敞顶箱-8.28查询", "到客户1费用", "到客户2费用")
+    values = tuple(
+        (
+            row.value("north_station_name"),
+            row.value("south_station_name"),
+            row.value("railway_freight_yuan_per_group"),
+            row.value("customer_1"),
+            row.value("customer_2"),
+        )
+        for row in rows
+    )
+    return (headers, *values)
+
+
+def _station_locations_from_mapped_rows(rows: tuple[object, ...]) -> dict[str, tuple[str, str]]:
+    result: dict[str, tuple[str, str]] = {}
+    ambiguous_keys: set[str] = set()
+    for row in rows:
+        name = _text(row.value("station_name"))
+        province = _text(row.value("province"))
+        city = _text(row.value("city"))
+        if not name or not province or not city:
+            continue
+        key = _station_key(name)
+        if key in ambiguous_keys:
+            continue
+        location = (province, city)
+        current = result.get(key)
+        if current is not None and current != location:
+            result.pop(key, None)
+            ambiguous_keys.add(key)
+            continue
+        result[key] = location
+    return result
 
 
 def load_confirmed_rail_station_nodes(data_dir: str | Path) -> tuple[NodeRecord, ...]:

@@ -13,6 +13,7 @@ DemoRunner = Callable[[], None]
 
 LEADER_DEMOS: dict[str, tuple[str, str]] = {
     "full-flow": ("北港至客户工厂全流程双目标推荐", "src.demos.leader_full_flow"),
+    "rail-container-full-flow": ("铁路集装箱本地正式数据全链路试算", "src.demos.rail_container_local_full_flow"),
     "route-search": ("MultiDiGraph 路径搜索与解释结果展示", "src.demos.leader_route_search"),
     "transport-graph": ("正式 MultiDiGraph 展示", "src.demos.leader_transport_graph"),
     "transport-edge": ("标准 TransportEdge 展示", "src.demos.leader_transport_edge"),

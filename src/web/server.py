@@ -24,7 +24,17 @@ from src.application.route_planning import (
     RoutePlanningResponse,
     RoutePlanningService,
 )
+from src.application.rail_container_planning import RailContainerPlanningService
+from src.application.unified_route_planning import (
+    UnifiedRoutePlanningError,
+    UnifiedRoutePlanningRequest,
+    UnifiedRoutePlanningService,
+)
 from src.data.loaders import DataLoadError, data_dir_from_env, load_real_data_bundle
+from src.data.rail_container_data import (
+    RailContainerLocalDataError,
+    load_rail_container_runtime_data,
+)
 from src.demos.leader_full_flow import (
     FullFlowDemoError,
     plan_full_flow,
@@ -90,10 +100,11 @@ class RouteWebContext:
         )
 
     def calculate(self, payload: dict[str, Any]) -> dict[str, Any]:
-        web_request = parse_route_web_request(payload)
+        web_request = parse_unified_route_web_request(payload)
         registry = self.bundle.node_registry
-        service = RoutePlanningService(
-            lambda request: plan_full_flow(
+        rail_runtime: dict[str, Any] = {}
+        service = UnifiedRoutePlanningService(
+            bulk_engine=lambda request: plan_full_flow(
                 request,
                 bundle=self.bundle,
                 coordinate_provider_factory=lambda region: (
@@ -105,13 +116,26 @@ class RouteWebContext:
                     )
                 ),
                 road_route_provider=TencentMapDrivingRouteProvider.from_env(),
-            )
+            ),
+            rail_engine=lambda request: _plan_rail_container_from_local_tables(
+                request,
+                data_dir=self.bundle.data_dir,
+                base_registry=registry,
+                runtime_holder=rail_runtime,
+            ),
         )
         result = service.plan(web_request)
-        return serialize_full_flow_result(
-            result,
-            route_control_points=self.route_control_points,
-        )
+        if result.selected_family == "bulk":
+            assert result.bulk_response is not None
+            # Keep the established bulk API response stable.  The browser treats
+            # the absence of ``planningFamily`` as the legacy/bulk result.
+            return serialize_full_flow_result(
+                result.bulk_response,
+                route_control_points=self.route_control_points,
+            )
+        assert result.rail_response is not None
+        runtime = rail_runtime["runtime"]
+        return serialize_rail_container_planning_result(result.rail_response, runtime)
 
 
 class RouteWebHandler(BaseHTTPRequestHandler):
@@ -239,6 +263,8 @@ class RouteWebHandler(BaseHTTPRequestHandler):
             ValueError,
             RouteRequestError,
             RailFreightCalculatorError,
+            UnifiedRoutePlanningError,
+            RailContainerLocalDataError,
             FullFlowDemoError,
             TencentMapProviderError,
             DataLoadError,
@@ -361,6 +387,67 @@ def parse_route_web_request(payload: dict[str, Any]) -> RoutePlanningRequest:
     )
 
 
+def parse_unified_route_web_request(payload: dict[str, Any]) -> UnifiedRoutePlanningRequest:
+    """Parse the only product-facing route input contract.
+
+    The user's high-level preference narrows the eligible family.  ``混合``
+    still respects package/unit compatibility and never converts tons to boxes.
+    """
+
+    return UnifiedRoutePlanningRequest(
+        northern_location=_required_text(payload.get("origin"), "北方地点"),
+        customer_name=_required_text(payload.get("destination"), "客户工厂"),
+        selected_south_port=_optional_text(payload.get("southPort")),
+        region=_optional_text(payload.get("region")) or "全国",
+        container_type=_optional_text(payload.get("containerType")),  # type: ignore[arg-type]
+        transport_preference=_optional_text(payload.get("transportPreference")) or "混合",  # type: ignore[arg-type]
+        request=RouteRequest(
+            quantity=_required_text(payload.get("quantity"), "重量 / 数量"),
+            quantity_unit=_required_text(payload.get("quantityUnit"), "计费单位"),
+            package_type=_required_text(payload.get("packageType"), "打包方式"),
+            commodity=_required_text(payload.get("commodity"), "粮食品种"),
+            trade_type=_optional_text(payload.get("tradeType")) or "内贸",
+        ),
+    )
+
+
+def _plan_rail_container_from_local_tables(
+    request: Any,
+    *,
+    data_dir: Path,
+    base_registry: Any,
+    runtime_holder: dict[str, Any],
+) -> Any:
+    manifest_value = _optional_text(os.environ.get("RAIL_CONTAINER_SOURCE_MANIFEST"))
+    if manifest_value is None:
+        fixture_value = _optional_text(os.environ.get("RAIL_CONTAINER_DEMO_FIXTURE"))
+        if fixture_value is None:
+            raise UnifiedRoutePlanningError(
+                "铁路方案尚未配置本地正式数据源清单；请设置 "
+                "RAIL_CONTAINER_SOURCE_MANIFEST。页面联调如需显式脱敏样例，可设置 "
+                "RAIL_CONTAINER_DEMO_FIXTURE。"
+            )
+        from types import SimpleNamespace
+
+        from src.demos.rail_container_platform_demo import load_platform_demo
+
+        fixture_path = Path(fixture_value)
+        if not fixture_path.is_absolute():
+            fixture_path = PROJECT_ROOT / fixture_path
+        _fixture_request, planning_data = load_platform_demo(fixture_path)
+        runtime_holder["runtime"] = SimpleNamespace(
+            node_registry=planning_data.node_registry,
+            local_data=SimpleNamespace(admitted_count=len(planning_data.trunk_provider.records)),
+        )
+        return RailContainerPlanningService(planning_data).plan(request)
+    manifest_path = Path(manifest_value)
+    if not manifest_path.is_absolute():
+        manifest_path = data_dir / manifest_path
+    runtime = load_rail_container_runtime_data(manifest_path, data_dir=data_dir, base_registry=base_registry)
+    runtime_holder["runtime"] = runtime
+    return RailContainerPlanningService(runtime.planning_data()).plan(request)
+
+
 def parse_rail_freight_calculator_request(
     payload: dict[str, Any],
 ) -> RailFreightCalculatorInput:
@@ -368,7 +455,22 @@ def parse_rail_freight_calculator_request(
 
     local_bases_payload = payload.get("localFreightBases")
     if local_bases_payload is None:
-        local_freight_bases: tuple[Decimal, ...] = ()
+        # Preserve the original calculator-page contract during its migration
+        # to the dynamic array.  A sparse ``localFreight2AdjustedBaseYuan`` is
+        # intentionally retained as item 2 rather than silently relabelled as
+        # item 1, because the workbook distinguishes the two rows.
+        legacy_local_bases: list[Decimal] = []
+        for index in range(1, 10):
+            value = payload.get(f"localFreight{index}AdjustedBaseYuan")
+            if value is None or str(value).strip() == "":
+                legacy_local_bases.append(Decimal("0"))
+                continue
+            legacy_local_bases.append(
+                _optional_decimal(value, Decimal("0"), f"地方运费第{index}项折算基数")
+            )
+        while legacy_local_bases and legacy_local_bases[-1] == 0:
+            legacy_local_bases.pop()
+        local_freight_bases = tuple(legacy_local_bases)
     elif not isinstance(local_bases_payload, list):
         raise ValueError("地方运费项 localFreightBases 必须是数组。")
     else:
@@ -428,6 +530,110 @@ def serialize_rail_freight_calculator_result(
             "inputLoadUnitPriceYuanPerTon": str(result.input_load_unit_price_yuan_per_ton),
         },
         "warnings": list(result.warnings),
+    }
+
+
+def serialize_rail_container_planning_result(response: Any, runtime: Any) -> dict[str, Any]:
+    """Use the same presentation shape as bulk results without inventing map lines."""
+
+    def route_payload(route: Any) -> dict[str, Any]:
+        total_cost = str(route.total_cost_yuan) if route.total_cost_yuan is not None else None
+        total_time = str(route.total_time_hours) if route.total_time_hours is not None else None
+        unit_cost = (
+            str(route.total_cost_yuan / response.request.request.quantity)
+            if route.total_cost_yuan is not None
+            else None
+        )
+        return {
+            "status": route.status,
+            "message": route.explanation,
+            "totalCostYuan": total_cost,
+            "unitCostYuan": unit_cost,
+            "totalTimeHours": total_time,
+            "pathNodeIds": list(route.path_node_ids),
+            "pathNames": [
+                runtime.node_registry.nodes[node_id].canonical_name
+                for node_id in route.path_node_ids
+                if node_id in runtime.node_registry.nodes
+            ],
+            "points": [],
+            "segments": [
+                {
+                    "segmentNo": segment.segment_no,
+                    "fromName": runtime.node_registry.nodes.get(segment.from_node_id, None).canonical_name
+                    if segment.from_node_id in runtime.node_registry.nodes else segment.from_node_id,
+                    "toName": runtime.node_registry.nodes.get(segment.to_node_id, None).canonical_name
+                    if segment.to_node_id in runtime.node_registry.nodes else segment.to_node_id,
+                    "transportMode": segment.transport_mode,
+                    "transportStage": segment.transport_stage,
+                    "edgeRole": segment.edge_role,
+                    "timeScope": segment.time_scope,
+                    "costYuan": str(segment.cost_yuan),
+                    "timeHours": str(segment.time_hours),
+                    "ruleId": segment.cost_rule_id,
+                    "ruleVersion": segment.cost_rule_version,
+                    "costComponents": [
+                        {
+                            "type": item.component_type,
+                            "amountYuan": str(item.amount_yuan),
+                            "sourceType": item.source_type,
+                            "ruleId": item.rule_id,
+                            "ruleVersion": item.rule_version,
+                            "detail": item.calculation_detail,
+                        }
+                        for item in segment.cost_components
+                    ],
+                    "geometry": _unavailable_geometry("铁路地图线路尚未接入真实铁路几何；不绘制示意线冒充实际线路。"),
+                }
+                for segment in route.segments
+            ],
+        }
+
+    warnings = list(response.warnings)
+    warnings.extend(
+        f"{item.south_station_name}/{item.terminal_plan_type or '干线'}：{item.message}"
+        for item in response.candidate_outcomes
+        if item.status == "manual_review"
+    )
+    return {
+        "status": "resolved",
+        "planningFamily": "rail_container",
+        "request": {
+            "origin": response.request.north_station_name,
+            "destination": response.request.customer_name,
+            "southPort": response.request.south_station_name,
+            "quantity": str(response.request.request.quantity),
+            "quantityUnit": response.request.request.quantity_unit,
+            "packageType": response.request.request.package_type,
+            "commodity": response.request.request.commodity,
+            "tradeType": response.request.request.trade_type,
+        },
+        "routes": {
+            "lowestCost": route_payload(response.recommendations.lowest_cost),
+            "fastestTime": route_payload(response.recommendations.fastest_time),
+        },
+        "candidates": [],
+        "candidateDecisions": [],
+        "intermediatePorts": [],
+        "runInfo": {
+            "graphEdgeCount": response.graph_edge_count,
+            "bulkShippingEdgeCount": 0,
+            "truckEdgeCount": sum(
+                segment.transport_mode == "汽运"
+                for route in (response.recommendations.lowest_cost, response.recommendations.fastest_time)
+                for segment in route.segments
+            ),
+            "bargeEdgeCount": 0,
+            "operationFeeIncludedCount": 0,
+            "operationFeeNotApplicableCount": 0,
+            "bargePlaceholderCapabilityCount": 0,
+            "warnings": warnings,
+            "routeGeometryMode": "rail_geometry_unavailable",
+            "routeControlPointSource": None,
+            "routeControlPointCount": 0,
+            "preciseRoadGeometryCount": 0,
+            "trunkAdmissionCount": runtime.local_data.admitted_count,
+        },
     }
 
 

@@ -16,7 +16,7 @@
         <div>
           <p class="eyebrow">COFCO TRADE (Shenzhen) · SCM · TSM</p>
           <h1>运输路径规划系统</h1>
-          <p class="subhead">散粮·内贸展示版｜北港—南港—客户工厂双目标路径决策</p>
+          <p class="subhead">多方式路线规划原型｜按订单包装、单位与节点能力自动筛选可行方案</p>
         </div>
         <div class="masthead-actions">
           <a class="header-link" href="/rail_calculator.html">铁路运费计算器</a>
@@ -34,15 +34,18 @@
               <div class="section-number">01</div>
               <div>
                 <h2>运输条件</h2>
-                <p>指定南港可留空，由模型自动比较。</p>
+                <p>可指定散粮、铁路或混合范围；混合仍只比较订单单位兼容的方案。</p>
               </div>
               <label>
-                <span>北-南港运段运输方式</span>
-                <input name="transportMode" type="hidden" value="散船" />
-                <div class="readonly-field">散船 <em>当前已接入</em></div>
+                <span>运输方案范围</span>
+                <select name="transportPreference" id="transportPreference">
+                  <option value="混合">混合（按订单自动筛选）</option>
+                  <option value="散粮">散粮运输</option>
+                  <option value="铁路">铁路集装箱运输</option>
+                </select>
               </label>
               <label>
-                <span>出发北港</span>
+                <span>北方地点</span>
                 <input name="origin" value="北良港" required />
               </label>
               <label>
@@ -55,8 +58,8 @@
               </label>
               <div class="field-pair">
                 <label>
-                  <span>指定南港 <em>可选</em></span>
-                  <input name="southPort" placeholder="留空自动选取" />
+                <span>指定中间节点 <em>可选</em></span>
+                <input name="southPort" placeholder="留空自动选取" />
                 </label>
                 <label>
                   <span>地点检索区域</span>
@@ -69,7 +72,7 @@
               <div class="section-number">02</div>
               <div>
                 <h2>订单信息</h2>
-                <p>当前展示范围：散粮、内贸、玉米/小麦；其他方式已预留接口，暂不参与测算。</p>
+                <p>散粮/吨与集装箱/箱严格分开计费；系统只比较当前订单可兼容且已准入的运输方案。</p>
               </div>
               <div class="field-pair">
                 <label>
@@ -81,22 +84,23 @@
                 </label>
                 <label>
                   <span>贸易类型</span>
-                  <input name="tradeType" type="hidden" value="内贸" />
-                  <div class="readonly-field">内贸 <em>当前已接入</em></div>
+                  <select name="tradeType"><option>内贸</option><option>外贸</option></select>
                 </label>
               </div>
               <div class="field-pair">
                 <label>
-                  <span>打包方式</span>
-                  <input name="packageType" type="hidden" value="散粮" />
-                  <div class="readonly-field">散粮 <em>当前已接入</em></div>
+                  <span>包装方式</span>
+                  <select name="packageType" id="packageType"><option value="散粮">散粮</option><option value="集装箱">集装箱</option></select>
                 </label>
                 <label>
                   <span>计费单位</span>
-                  <input name="quantityUnit" type="hidden" value="吨" />
-                  <div class="readonly-field">吨</div>
+                  <select name="quantityUnit" id="quantityUnit"><option value="吨">吨</option><option value="箱">箱</option></select>
                 </label>
               </div>
+              <label id="containerTypeField" hidden>
+                <span>集装箱箱型</span>
+                <select name="containerType"><option>敞顶箱</option><option>顶开门箱</option></select>
+              </label>
               <label>
                 <span>重量 / 数量</span>
                 <input

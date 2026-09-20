@@ -1,0 +1,65 @@
+{
+  "sources": [
+    {
+      "source_id": "rail_station_master",
+      "table_type": "station_master",
+      "workbook": "铁路站点主数据.xlsx",
+      "sheet_name": "站点主数据",
+      "field_mapping": {
+        "station_name": ["节点名称", "站点名称"],
+        "station_role": ["站点角色"],
+        "province": ["所在省/自治区/直辖市"],
+        "city": ["所在市"],
+        "longitude": ["经度"],
+        "latitude": ["纬度"]
+      }
+    },
+    {
+      "source_id": "rail_trunk_rate",
+      "table_type": "trunk_rate",
+      "workbook": "铁路集装箱运价.xlsx",
+      "sheet_name": "北南干线运价",
+      "field_mapping": {
+        "north_station_name": ["发站", "北站"],
+        "south_station_name": ["到站", "南站"],
+        "base_freight": ["铁路干线费率", "费用"],
+        "base_freight_unit": ["费用单位"],
+        "commodity_scope": ["适用品种"],
+        "trade_type": ["贸易类型"],
+        "container_type": ["箱型"],
+        "confirmation_status": ["确认状态"],
+        "discount_ratio": ["下浮率"],
+        "group_box_count": ["每组箱数"],
+        "origin_region": ["始发时效区域"],
+        "destination_region": ["到达时效区域"]
+      },
+      "defaults": {
+        "trade_type": "内贸",
+        "confirmation_status": "manual_review"
+      }
+    },
+    {
+      "source_id": "rail_station_fee",
+      "table_type": "station_fee",
+      "workbook": "铁路站点费用.xlsx",
+      "sheet_name": "上下站费",
+      "field_mapping": {
+        "station_name": ["站点名称"],
+        "fee_yuan_per_box": ["上下站费元每箱"],
+        "confirmation_status": ["确认状态"]
+      }
+    },
+    {
+      "source_id": "rail_time_region",
+      "table_type": "time_region",
+      "workbook": "铁路运输时效.xlsx",
+      "sheet_name": "区域时效",
+      "field_mapping": {
+        "origin_region": ["始发区域"],
+        "destination_region": ["到达区域"],
+        "duration_hours": ["完整时效小时"],
+        "confirmation_status": ["确认状态"]
+      }
+    }
+  ]
+}

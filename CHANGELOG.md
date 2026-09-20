@@ -2,6 +2,22 @@
 
 This changelog records actual engineering changes. It is not a leader-facing daily report.
 
+## 2026-09-08
+
+### Changed
+
+- Added a reusable read-only local Excel source layer and railway-container source manifest.  Station master data, trunk rates, station fees, time regions, and each terminal plan are independently typed, audited, and admitted; admitted records build formal railway edges without changing graph/search code when a later workbook is supplied.
+- Extended railway planning to retain direct truck, customer dedicated siding, and third-party dedicated siding as independently constructed terminal alternatives.  A shared trunk edge is deduplicated, while the terminal alternatives remain parallel edges in `nx.MultiDiGraph`.
+- Added a `UnifiedRoutePlanningService` and a Web scope selector for `散粮/铁路/混合`.  Explicit bulk and rail choices constrain the legal package/unit pair; mixed mode still dispatches only to package/unit-compatible Providers and never converts tons, boxes, or containers.
+- Kept railway source configuration explicit through ignored `RAIL_CONTAINER_SOURCE_MANIFEST`.  Missing/unsafe source data fails visibly rather than consuming an interactive Demo or quotation-calculator input.  Railway map geometry is deliberately withheld until the maintained display path is connected.
+- Restored compatibility for the quotation calculator's legacy numbered `localFreightNAdjustedBaseYuan` fields while preserving the corrected local-freight formula `base × (1 - discount_ratio)`.
+- Added an explicitly enabled Web integration fixture path for railway UI testing.  It never supersedes a configured formal manifest, and its route components remain `demo_placeholder`.
+
+### Verification
+
+- Unified application, railway local-data, railway planning, and Web-contract focused tests passed: `22 passed in 0.86s`.
+- Full developer smoke passed with `511 passed in 2.46s`; real-data smoke passed.  The Tencent probe returned traceable `manual_review` on `ConnectionError` in this process and is not live-API success evidence.
+
 ## 2026-09-02
 
 ### Changed

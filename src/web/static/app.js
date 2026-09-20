@@ -34,6 +34,10 @@ const elements = {
   messageList: document.querySelector("#messageList"),
   edgeCount: document.querySelector("#edgeCount"),
   errorChecklist: document.querySelector("#errorChecklist"),
+  packageType: document.querySelector("#packageType"),
+  quantityUnit: document.querySelector("#quantityUnit"),
+  containerTypeField: document.querySelector("#containerTypeField"),
+  transportPreference: document.querySelector("#transportPreference"),
   formFields: [...document.querySelectorAll("#routeForm input, #routeForm select")],
   cards: [...document.querySelectorAll(".route-card")],
   routeCards: {
@@ -65,6 +69,10 @@ async function init() {
 function bindInteractions() {
   elements.form.addEventListener("submit", runRoute);
   elements.form.addEventListener("input", syncFieldIndicators);
+  elements.packageType.addEventListener("change", syncOrderCompatibility);
+  elements.transportPreference.addEventListener("change", syncTransportPreference);
+  syncTransportPreference();
+  syncOrderCompatibility();
 
   const selectRoute = (routeId) => {
     state.activeRoute = routeId;
@@ -88,6 +96,22 @@ function bindInteractions() {
   elements.retryButton.addEventListener("click", () => {
     elements.form.requestSubmit();
   });
+}
+
+function syncOrderCompatibility() {
+  const isContainer = elements.packageType.value === "集装箱";
+  elements.quantityUnit.value = isContainer ? "箱" : "吨";
+  elements.quantityUnit.disabled = true;
+  elements.containerTypeField.hidden = !isContainer;
+}
+
+function syncTransportPreference() {
+  const preference = elements.transportPreference.value;
+  if (preference === "散粮") elements.packageType.value = "散粮";
+  if (preference === "铁路") elements.packageType.value = "集装箱";
+  elements.packageType.disabled = preference !== "混合";
+  syncOrderCompatibility();
+  syncFieldIndicators();
 }
 
 function syncFieldIndicators() {
@@ -172,6 +196,13 @@ async function runRoute(event) {
   resetMessages();
   const formData = new FormData(elements.form);
   const payload = Object.fromEntries(formData.entries());
+  // Disabled form controls are intentionally omitted by FormData.  The unit
+  // selector is display-only because package type determines the legal unit,
+  // so put the derived value back into the request explicitly.
+  payload.quantityUnit = elements.packageType.value === "集装箱" ? "箱" : "吨";
+  payload.packageType = elements.packageType.value;
+  payload.transportPreference = elements.transportPreference.value;
+  if (elements.packageType.value !== "集装箱") delete payload.containerType;
   try {
     const response = await fetch("/api/route", {
       method: "POST",
@@ -212,15 +243,25 @@ function renderResult() {
   elements.errorChecklist.hidden = true;
   const info = state.result.runInfo;
   elements.edgeCount.textContent = `${info.graphEdgeCount} 条边进入搜索图`;
-  appendMessage(
-    `散船干线 ${info.bulkShippingEdgeCount} 条；汽运 ${info.truckEdgeCount} 条；驳船 ${info.bargeEdgeCount} 条。`,
-    "info",
-  );
+  if (state.result.planningFamily === "rail_container") {
+    appendMessage(
+      `当前订单按集装箱/箱筛选铁路方案；已准入铁路干线 ${info.trunkAdmissionCount || 0} 条。`,
+      "info",
+    );
+  } else {
+    appendMessage(
+      `散船干线 ${info.bulkShippingEdgeCount} 条；汽运 ${info.truckEdgeCount} 条；驳船 ${info.bargeEdgeCount} 条。`,
+      "info",
+    );
+  }
   if (info.routeGeometryMode === "mixed_by_segment") {
     appendMessage(
       "地图口径：散船与驳船由实际端点接入最近的已维护航线控制点；汽运使用与本次测算相同的腾讯驾车道路折线。",
       "info",
     );
+  }
+  if (info.routeGeometryMode === "rail_geometry_unavailable") {
+    appendMessage("铁路费用和时效可按正式数据测算；真实铁路几何尚未接入，地图不绘制虚构线路。", "warning");
   }
   if (info.routeControlPointCount) {
     appendMessage(
@@ -274,15 +315,15 @@ function renderRoutes() {
   ["lowestCost", "fastestTime"].forEach((routeId) => {
     const route = state.result.routes[routeId];
     const card = elements.routeCards[routeId];
-    card.pathNames.textContent = route.pathNames.join(" → ");
-    card.totalCost.textContent = `${formatNumber(route.totalCostYuan)} 元`;
-    card.totalTime.textContent = formatDays(route.totalTimeHours);
+    card.pathNames.textContent = (route.pathNames || []).join(" → ") || route.message || "未形成完整路线";
+    card.totalCost.textContent = route.totalCostYuan == null ? "—" : `${formatNumber(route.totalCostYuan)} 元`;
+    card.totalTime.textContent = route.totalTimeHours == null ? "—" : formatDays(route.totalTimeHours);
     card.unitCost.textContent =
       route.unitCostYuan == null
         ? "—"
         : `${formatNumber(route.unitCostYuan)} ${unitCostLabel()}`;
     card.segmentList.replaceChildren(
-      ...route.segments.map((segment) => renderSegment(segment)),
+      ...(route.segments || []).map((segment) => renderSegment(segment)),
     );
   });
   renderMapRoutes();
@@ -326,7 +367,7 @@ function renderMapRoutes() {
   });
   const uniquePoints = new Map();
   routeEntries.forEach(([, route]) => {
-    route.points.forEach((point) => uniquePoints.set(point.nodeId, point));
+    (route.points || []).forEach((point) => uniquePoints.set(point.nodeId, point));
   });
   state.pointById = uniquePoints;
   state.nodeInfoMap = buildNodeInfoMap(state.result);
@@ -369,9 +410,9 @@ function renderMapRoutes() {
 
   const boundsPoints = [...uniquePoints.values()];
   routeEntries.forEach(([id, route, color]) => {
-    route.segments.forEach((segment) => {
+    (route.segments || []).forEach((segment) => {
       const geometry = segment.geometry;
-      if (!geometry || geometry.points.length < 2) return;
+      if (!geometry || !Array.isArray(geometry.points) || geometry.points.length < 2) return;
       const isActive = state.activeRoute === id;
       const isSchematic = geometry.isSchematic;
       const isShipping = segment.transportStage === "north_to_south";

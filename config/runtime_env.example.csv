@@ -1,6 +1,8 @@
 key,value,required,note
 DATA_DIR,.\data_REAL,true,真实数据目录；真实路径只写入 local_env/runtime_env.csv。
 FREIGHT_WORKBOOK_PATH,,false,可选：显式指定本次运行使用的运费数据 .xlsx；空值时读取 DATA_DIR 下的运费数据.xlsx。
+RAIL_CONTAINER_SOURCE_MANIFEST,,false,可选：铁路集装箱本地 Excel 数据源清单 JSON；建议放在 DATA_DIR 下并仅在 local_env/runtime_env.csv 填写真实文件名。
+RAIL_CONTAINER_DEMO_FIXTURE,,false,仅供Web联调：显式指定脱敏铁路样例JSON；正式清单存在时优先使用正式清单，不得将样例结果作为真实报价。
 TENCENT_MAP_API_KEY,,false,腾讯地图 API Key；不要提交真实 Key。
 TENCENT_MAP_JS_KEY,,false,可选的腾讯 JavaScript API GL 专用 Key；仅写入本地 runtime_env.csv，不要提交真实 Key。
 REAL_DATA_DEMO_MANUAL_TIME_HOURS,24,false,真实数据图搜索 smoke 的本地演示人工时间。
